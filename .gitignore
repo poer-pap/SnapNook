@@ -1,0 +1,6 @@
+.build/
+.clang-module-cache/
+.codex-home/
+
+.DS_Store
+._*
