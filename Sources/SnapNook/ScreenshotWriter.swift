@@ -13,8 +13,26 @@ final class ScreenshotWriter {
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
 
         let fileURL = folderURL.appendingPathComponent(Self.filename())
-        try pngData.write(to: fileURL)
+        try write(data: pngData, to: fileURL)
         return fileURL
+    }
+
+    func write(data pngData: Data, to fileURL: URL) throws {
+        try pngData.write(to: fileURL, options: .atomic)
+    }
+
+    static func filename(createdAt: Date = Date()) -> String {
+        "SnapNook-\(filenameTimestamp(from: createdAt)).png"
+    }
+
+    private static func filenameTimestamp(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: date)
+    }
+
+    private static func filename() -> String {
+        filename(createdAt: Date())
     }
 
     static func pngData(from image: NSImage) throws -> Data {
@@ -27,12 +45,6 @@ final class ScreenshotWriter {
         }
 
         return pngData
-    }
-
-    private static func filename() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "SnapNook-\(formatter.string(from: Date())).png"
     }
 }
 

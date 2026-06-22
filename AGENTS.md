@@ -13,7 +13,7 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 - `ESC` 取消截图
 - 截图后显示左下角浮动预览
 - 预览中手动复制到剪贴板
-- 预览中手动保存 PNG 到 `~/Desktop/SnapNook/`
+- 预览中手动保存 PNG 到用户选择的位置
 
 ## 当前技术方案
 
@@ -48,9 +48,9 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 - `Sources/SnapNook/ClipboardWriter.swift`
   剪贴板写入。
 - `Sources/SnapNook/ScreenshotPreviewItem.swift`
-  截图预览数据模型，持有 `NSImage`、PNG data、截图区域和屏幕信息。
+  截图预览数据模型，持有 `NSImage`、PNG data、创建时间、截图区域和屏幕信息。
 - `Sources/SnapNook/ScreenshotPreviewController.swift`
-  截图后浮动预览窗口的生命周期、自动关闭、Pin、固定尺寸和屏幕定位。
+  截图后浮动预览窗口的生命周期、自动关闭、保存面板、固定尺寸和屏幕定位。
 - `Sources/SnapNook/ScreenshotPreviewPanel.swift`
   透明无边框、非激活的浮动预览 `NSPanel`，固定尺寸为 `300x180`。
 - `Sources/SnapNook/ScreenshotPreviewView.swift`
@@ -67,14 +67,14 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 当前环境已验证可用的方式是使用 Xcode beta 的工具链，并显式指定 `DEVELOPER_DIR`：
 
 ```sh
-env DEVELOPER_DIR=/Users/loners/Downloads/Xcode-beta.app/Contents/Developer scripts/build_app.sh
+env DEVELOPER_DIR=/Users/loners/Downloads/Xcode-beta.app/Contents/Developer bash scripts/build_app.sh
 open .build/SnapNook.app
 ```
 
 如果系统已正确切换 `xcode-select`，也可以直接运行：
 
 ```sh
-scripts/build_app.sh
+bash scripts/build_app.sh
 open .build/SnapNook.app
 ```
 
@@ -93,11 +93,11 @@ open .build/SnapNook.app
 9. 浮动预览窗口尺寸固定为 `300x180`，不能跟随截图原图尺寸变化。
 10. 浮动预览默认显示截图缩略图，不抢主窗口焦点，不显示 Dock 图标。
 11. 缩略图必须在固定预览区域内按比例完整显示，不能拉伸变形；超宽图、超高图、小图都要正确显示。
-12. 鼠标移入预览后显示 `Copy`、`Save`、`Close`、`Pin` 操作，并显示毛玻璃/模糊背景；鼠标移出后恢复普通缩略图状态。
-13. 点击 `Copy` 会复制当前截图原图到剪贴板，不能使用缩略图。
-14. 点击 `Save` 会保存当前截图原始 PNG 到 `~/Desktop/SnapNook/`，命名格式为 `SnapNook-yyyyMMdd-HHmmss.png`。
-15. 默认 8 秒后自动关闭预览；鼠标悬停时暂停自动关闭。
-16. 点击 `Pin` 后预览不会自动关闭。
+12. 鼠标移入预览后显示 `Copy`、`Save`、`Close` 操作，并显示毛玻璃/模糊背景；鼠标移出后恢复普通缩略图状态。
+13. 点击 `Close` 后立即关闭当前浮动预览，不保存图片，不复制图片，不弹确认框。
+14. 点击 `Copy` 会复制当前截图原图到剪贴板，不能使用缩略图；复制成功后浮动预览关闭，且不会自动保存文件。
+15. 点击 `Save` 会弹出 macOS 原生 `NSSavePanel`，默认文件名为 `SnapNook-yyyyMMdd-HHmmss.png`，用户可修改文件名和目录；确认保存后才写入原始 PNG 数据，取消时预览保持显示。
+16. 默认 8 秒后自动关闭预览；鼠标悬停时暂停自动关闭。
 17. 多显示器下预览优先出现在截图区域所在屏幕，兜底为当前鼠标所在屏幕。
 
 ## V1 范围边界
@@ -156,3 +156,4 @@ open .build/SnapNook.app
 - 浮动预览定位必须基于 `NSScreen.visibleFrame` 计算，不能写死屏幕坐标，也不能复用上一次显示位置。
 - 浮动预览窗口尺寸当前固定为 `300x180`；不要使用截图原图尺寸驱动 `NSPanel` / `NSWindow` 大小。
 - 预览图只允许作为缩略图展示；复制和保存必须继续使用原图与原始 PNG 数据。
+- 当前版本截图完成后只显示浮动预览，不自动保存到桌面或其他目录；是否保存仅由用户点击 `Save` 决定。

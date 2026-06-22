@@ -46,6 +46,7 @@ final class CaptureCoordinator {
             let item = ScreenshotPreviewItem(
                 image: image,
                 pngData: try ScreenshotWriter.pngData(from: image),
+                createdAt: Date(),
                 captureRect: rect,
                 screenFrame: screenFrame
             )

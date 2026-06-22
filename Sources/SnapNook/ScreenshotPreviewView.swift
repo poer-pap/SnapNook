@@ -4,7 +4,6 @@ final class ScreenshotPreviewView: NSView {
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
-    var onPin: (() -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
 
     private let imageView = NSImageView()
@@ -108,8 +107,6 @@ final class ScreenshotPreviewView: NSView {
         let saveButton = makeButton(title: "Save", action: #selector(saveTapped))
         let closeButton = makeIconButton(symbolName: "xmark", fallbackTitle: "x", action: #selector(closeTapped))
         closeButton.toolTip = "Close"
-        let pinButton = makeIconButton(symbolName: "pin.fill", fallbackTitle: "Pin", action: #selector(pinTapped))
-        pinButton.toolTip = "Pin"
 
         let stack = NSStackView(views: [copyButton, saveButton])
         stack.orientation = NSUserInterfaceLayoutOrientation.vertical
@@ -117,17 +114,14 @@ final class ScreenshotPreviewView: NSView {
         stack.alignment = NSLayoutConstraint.Attribute.centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        [stack, closeButton, pinButton].forEach { controlsView.addSubview($0) }
+        [stack, closeButton].forEach { controlsView.addSubview($0) }
 
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: controlsView.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: controlsView.centerYAnchor),
 
             closeButton.leadingAnchor.constraint(equalTo: controlsView.leadingAnchor, constant: 12),
-            closeButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 12),
-
-            pinButton.trailingAnchor.constraint(equalTo: controlsView.trailingAnchor, constant: -12),
-            pinButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 12)
+            closeButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 12)
         ])
     }
 
@@ -162,9 +156,5 @@ final class ScreenshotPreviewView: NSView {
 
     @objc private func closeTapped() {
         onClose?()
-    }
-
-    @objc private func pinTapped() {
-        onPin?()
     }
 }
