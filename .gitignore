@@ -1,6 +1,7 @@
 .build/
 .clang-module-cache/
 .codex-home/
+.swiftpm/
 
 .DS_Store
 ._*
