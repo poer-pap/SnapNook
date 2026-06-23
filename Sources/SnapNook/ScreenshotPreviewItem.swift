@@ -6,4 +6,8 @@ struct ScreenshotPreviewItem {
     let createdAt: Date
     let captureRect: CGRect?
     let screenFrame: CGRect
+
+    var originalImage: NSImage {
+        image
+    }
 }

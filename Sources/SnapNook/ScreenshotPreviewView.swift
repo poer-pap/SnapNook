@@ -1,6 +1,7 @@
 import AppKit
 
 final class ScreenshotPreviewView: NSView {
+    var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
@@ -103,6 +104,7 @@ final class ScreenshotPreviewView: NSView {
     }
 
     private func addControls() {
+        let editButton = makeButton(title: "Edit", action: #selector(editTapped))
         let copyButton = makeButton(title: "Copy", action: #selector(copyTapped))
         let saveButton = makeButton(title: "Save", action: #selector(saveTapped))
         let closeButton = makeIconButton(symbolName: "xmark", fallbackTitle: "x", action: #selector(closeTapped))
@@ -115,13 +117,17 @@ final class ScreenshotPreviewView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         [stack, closeButton].forEach { controlsView.addSubview($0) }
+        controlsView.addSubview(editButton)
 
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: controlsView.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: controlsView.centerYAnchor),
 
             closeButton.leadingAnchor.constraint(equalTo: controlsView.leadingAnchor, constant: 12),
-            closeButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 12)
+            closeButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 12),
+
+            editButton.leadingAnchor.constraint(equalTo: controlsView.leadingAnchor, constant: 12),
+            editButton.bottomAnchor.constraint(equalTo: controlsView.bottomAnchor, constant: -12)
         ])
     }
 
@@ -144,6 +150,10 @@ final class ScreenshotPreviewView: NSView {
         button.widthAnchor.constraint(equalToConstant: 34).isActive = true
         button.heightAnchor.constraint(equalToConstant: 34).isActive = true
         return button
+    }
+
+    @objc private func editTapped() {
+        onEdit?()
     }
 
     @objc private func copyTapped() {

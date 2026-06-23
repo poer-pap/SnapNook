@@ -10,6 +10,7 @@ final class ScreenshotPreviewController {
     private var panel: ScreenshotPreviewPanel?
     private var timer: Timer?
     private var isClosed = true
+    private var editorControllers: [ScreenshotEditorWindowController] = []
 
     func show(item: ScreenshotPreviewItem) {
         close()
@@ -18,6 +19,9 @@ final class ScreenshotPreviewController {
         let panel = ScreenshotPreviewPanel(contentRect: NSRect(origin: .zero, size: ScreenshotPreviewPanel.previewPanelSize))
         let view = ScreenshotPreviewView(image: item.image)
 
+        view.onEdit = { [weak self] in
+            self?.openEditor(for: item)
+        }
         view.onCopy = { [weak self] in
             guard let self else { return }
             guard ClipboardWriter.copy(image: item.image, pngData: item.pngData) else {
@@ -114,6 +118,17 @@ final class ScreenshotPreviewController {
                 }
             }
         }
+    }
+
+    private func openEditor(for item: ScreenshotPreviewItem) {
+        let controller = ScreenshotEditorWindowController(item: item)
+        controller.onClose = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.editorControllers.removeAll { $0 === controller }
+        }
+        editorControllers.append(controller)
+        controller.showEditor()
+        close()
     }
 
     private static func previewFrame(size: NSSize, screen: NSScreen?) -> NSRect {
