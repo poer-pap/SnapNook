@@ -15,6 +15,8 @@ enum EditorTool: String, CaseIterable {
         .rectangle,
         .arrow,
         .text,
-        .highlight
+        .highlight,
+        .blur,
+        .mosaic
     ]
 }

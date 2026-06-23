@@ -30,7 +30,9 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     var onSelectionChange: ((UUID?) -> Void)?
 
     private let image: NSImage
+    private let imageCGImage: CGImage?
     private let imageSize: CGSize
+    private let imageEffectProcessor: ImageEffectProcessor?
     private var trackingArea: NSTrackingArea?
     private var interactionState: EditorInteractionState = .idle
     private var previewAnnotation: AnnotationItem? {
@@ -44,7 +46,13 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
 
     init(image: NSImage) {
         self.image = image
+        self.imageCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         self.imageSize = Self.imagePixelSize(for: image)
+        if let cgImage = self.imageCGImage {
+            self.imageEffectProcessor = ImageEffectProcessor(sourceImage: cgImage)
+        } else {
+            self.imageEffectProcessor = nil
+        }
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -106,10 +114,22 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
 
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         let visibleAnnotations = annotationsForDisplay()
+        imageEffectProcessor?.drawPreviewEffects(
+            for: visibleAnnotations,
+            displayedImageRect: displayedImageRect,
+            transform: transform
+        )
         AnnotationRenderer.draw(annotations: visibleAnnotations, in: context, transform: transform)
 
         if let annotation = selectedAnnotationForDisplay() {
             AnnotationRenderer.drawSelection(for: annotation, in: context, transform: transform)
+        }
+
+        if let previewAnnotation, isDrawingEffectPreview(previewAnnotation) {
+            let rect = previewAnnotation.blur?.rect ?? previewAnnotation.mosaic?.rect
+            if let rect {
+                AnnotationRenderer.drawDraftRect(rect, in: context, transform: transform)
+            }
         }
     }
 
@@ -147,6 +167,10 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             beginDrawingArrow(at: viewPoint)
         case .highlight:
             beginDrawingHighlight(at: viewPoint)
+        case .blur:
+            beginDrawingBlur(at: viewPoint)
+        case .mosaic:
+            beginDrawingMosaic(at: viewPoint)
         case .text:
             beginTextCreation(at: viewPoint)
         case .select:
@@ -294,6 +318,28 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         )
     }
 
+    private func beginDrawingBlur(at viewPoint: CGPoint) {
+        guard let imagePoint = canvasTransform.viewPointToImagePoint(viewPoint) else {
+            log("beginDrawingBlur ignored point outside image: \(debugPoint(viewPoint))")
+            return
+        }
+
+        let annotation = AnnotationItem.blur(BlurAnnotation(rect: CGRect(origin: imagePoint, size: .zero)))
+        setInteractionState(.drawingBlur(start: imagePoint, current: imagePoint))
+        previewAnnotation = annotation
+    }
+
+    private func beginDrawingMosaic(at viewPoint: CGPoint) {
+        guard let imagePoint = canvasTransform.viewPointToImagePoint(viewPoint) else {
+            log("beginDrawingMosaic ignored point outside image: \(debugPoint(viewPoint))")
+            return
+        }
+
+        let annotation = AnnotationItem.mosaic(MosaicAnnotation(rect: CGRect(origin: imagePoint, size: .zero)))
+        setInteractionState(.drawingMosaic(start: imagePoint, current: imagePoint))
+        previewAnnotation = annotation
+    }
+
     private func beginSelectionInteraction(at viewPoint: CGPoint, clickCount: Int) {
         let hit = hitTestAnnotation(at: viewPoint, transform: canvasTransform)
         log("hitTest result=\(String(describing: hit)) selected=\(String(describing: selectedAnnotationID))")
@@ -338,7 +384,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 startMouse: viewPoint,
                 originalRect: text.rect
             ))
-        case .rectangleBody(let id), .arrowBody(let id), .textBody(let id), .highlightBody(let id):
+        case .rectangleBody(let id), .arrowBody(let id), .textBody(let id), .highlightBody(let id), .blurBody(let id), .mosaicBody(let id):
             guard let annotation = annotations.first(where: { $0.id == id }) else {
                 setInteractionState(.idle)
                 return
@@ -370,6 +416,28 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 startMouse: viewPoint,
                 originalRect: highlight.rect
             ))
+        case .blurHandle(let id, let handle):
+            guard let annotation = annotations.first(where: { $0.id == id }), let blur = annotation.blur else {
+                setInteractionState(.idle)
+                return
+            }
+            setInteractionState(.resizingBlur(
+                id: id,
+                handle: handle,
+                startMouse: viewPoint,
+                originalRect: blur.rect
+            ))
+        case .mosaicHandle(let id, let handle):
+            guard let annotation = annotations.first(where: { $0.id == id }), let mosaic = annotation.mosaic else {
+                setInteractionState(.idle)
+                return
+            }
+            setInteractionState(.resizingMosaic(
+                id: id,
+                handle: handle,
+                startMouse: viewPoint,
+                originalRect: mosaic.rect
+            ))
         }
     }
 
@@ -389,6 +457,14 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             let current = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
             setInteractionState(.drawingHighlight(start: start, current: current))
             previewAnnotation = .highlight(HighlightAnnotation(rect: normalizedRect(from: start, to: current)))
+        case .drawingBlur(let start, _):
+            let current = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            setInteractionState(.drawingBlur(start: start, current: current))
+            previewAnnotation = .blur(BlurAnnotation(rect: normalizedRect(from: start, to: current)))
+        case .drawingMosaic(let start, _):
+            let current = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            setInteractionState(.drawingMosaic(start: start, current: current))
+            previewAnnotation = .mosaic(MosaicAnnotation(rect: normalizedRect(from: start, to: current)))
         case .movingAnnotation(_, let startMouse, let originalAnnotation):
             let delta = imageDelta(from: startMouse, to: viewPoint)
             previewAnnotation = movedAnnotation(originalAnnotation, by: delta)
@@ -413,6 +489,30 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 minimumSize: Metrics.minimumHighlightSize
             )
             previewAnnotation = .highlight(HighlightAnnotation(
+                id: selectedAnnotationID ?? UUID(),
+                rect: resizedRect
+            ))
+        case .resizingBlur(_, let handle, _, let originalRect):
+            let currentImagePoint = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            let resizedRect = resizedRectangle(
+                originalRect: originalRect,
+                handle: handle,
+                currentImagePoint: currentImagePoint,
+                minimumSize: Metrics.minimumBlurSize
+            )
+            previewAnnotation = .blur(BlurAnnotation(
+                id: selectedAnnotationID ?? UUID(),
+                rect: resizedRect
+            ))
+        case .resizingMosaic(_, let handle, _, let originalRect):
+            let currentImagePoint = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            let resizedRect = resizedRectangle(
+                originalRect: originalRect,
+                handle: handle,
+                currentImagePoint: currentImagePoint,
+                minimumSize: Metrics.minimumMosaicSize
+            )
+            previewAnnotation = .mosaic(MosaicAnnotation(
                 id: selectedAnnotationID ?? UUID(),
                 rect: resizedRect
             ))
@@ -472,6 +572,20 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             let annotation = AnnotationItem.highlight(HighlightAnnotation(rect: rect))
             notifySelectionChange(annotation.id)
             onCommitCommand?(.add(annotation))
+        case .drawingBlur(let start, _):
+            let end = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            let rect = normalizedRect(from: start, to: end)
+            guard rect.width >= Metrics.minimumBlurSize, rect.height >= Metrics.minimumBlurSize else { return }
+            let annotation = AnnotationItem.blur(BlurAnnotation(rect: rect))
+            notifySelectionChange(annotation.id)
+            onCommitCommand?(.add(annotation))
+        case .drawingMosaic(let start, _):
+            let end = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            let rect = normalizedRect(from: start, to: end)
+            guard rect.width >= Metrics.minimumMosaicSize, rect.height >= Metrics.minimumMosaicSize else { return }
+            let annotation = AnnotationItem.mosaic(MosaicAnnotation(rect: rect))
+            notifySelectionChange(annotation.id)
+            onCommitCommand?(.add(annotation))
         case .movingAnnotation(_, _, let originalAnnotation):
             guard let previewAnnotation, previewAnnotation.id == originalAnnotation.id else { return }
             guard annotationsDiffer(originalAnnotation, previewAnnotation) else { return }
@@ -495,6 +609,26 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 id: id,
                 rect: originalRect,
                 dimOpacity: highlight.dimOpacity
+            ))
+            notifySelectionChange(id)
+            onCommitCommand?(.update(before: originalAnnotation, after: previewAnnotation))
+        case .resizingBlur(let id, _, _, let originalRect):
+            guard let previewAnnotation = previewAnnotation, previewAnnotation.id == id else { return }
+            guard let blur = previewAnnotation.blur, blur.rect != originalRect else { return }
+            let originalAnnotation = AnnotationItem.blur(BlurAnnotation(
+                id: id,
+                rect: originalRect,
+                radius: blur.radius
+            ))
+            notifySelectionChange(id)
+            onCommitCommand?(.update(before: originalAnnotation, after: previewAnnotation))
+        case .resizingMosaic(let id, _, _, let originalRect):
+            guard let previewAnnotation = previewAnnotation, previewAnnotation.id == id else { return }
+            guard let mosaic = previewAnnotation.mosaic, mosaic.rect != originalRect else { return }
+            let originalAnnotation = AnnotationItem.mosaic(MosaicAnnotation(
+                id: id,
+                rect: originalRect,
+                blockSize: mosaic.blockSize
             ))
             notifySelectionChange(id)
             onCommitCommand?(.update(before: originalAnnotation, after: previewAnnotation))
@@ -731,6 +865,32 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 if rect.insetBy(dx: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance, dy: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance).contains(viewPoint) {
                     return .highlightBody(id: highlight.id)
                 }
+            case .blur(let blur):
+                if selectedAnnotationID == blur.id {
+                    for handle in ResizeHandle.allCases {
+                        if AnnotationRenderer.blurHandleRects(for: blur, transform: transform)[handle]?.contains(viewPoint) == true {
+                            return .blurHandle(id: blur.id, handle: handle)
+                        }
+                    }
+                }
+
+                let rect = transform.imageRectToViewRect(blur.rect)
+                if rect.insetBy(dx: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance, dy: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance).contains(viewPoint) {
+                    return .blurBody(id: blur.id)
+                }
+            case .mosaic(let mosaic):
+                if selectedAnnotationID == mosaic.id {
+                    for handle in ResizeHandle.allCases {
+                        if AnnotationRenderer.mosaicHandleRects(for: mosaic, transform: transform)[handle]?.contains(viewPoint) == true {
+                            return .mosaicHandle(id: mosaic.id, handle: handle)
+                        }
+                    }
+                }
+
+                let rect = transform.imageRectToViewRect(mosaic.rect)
+                if rect.insetBy(dx: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance, dy: -AnnotationRenderer.SelectionStyle.rectangleHitTolerance).contains(viewPoint) {
+                    return .mosaicBody(id: mosaic.id)
+                }
             }
         }
 
@@ -775,6 +935,22 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 height: highlight.rect.height
             )
             return .highlight(highlight.updatingRect(clampedRect(movedRect)))
+        case .blur(let blur):
+            let movedRect = CGRect(
+                x: blur.rect.origin.x + delta.x,
+                y: blur.rect.origin.y + delta.y,
+                width: blur.rect.width,
+                height: blur.rect.height
+            )
+            return .blur(blur.updatingRect(clampedRect(movedRect)))
+        case .mosaic(let mosaic):
+            let movedRect = CGRect(
+                x: mosaic.rect.origin.x + delta.x,
+                y: mosaic.rect.origin.y + delta.y,
+                width: mosaic.rect.width,
+                height: mosaic.rect.height
+            )
+            return .mosaic(mosaic.updatingRect(clampedRect(movedRect)))
         }
     }
 
@@ -944,6 +1120,10 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             return left.rect != right.rect || left.text != right.text
         case (.highlight(let left), .highlight(let right)):
             return left.rect != right.rect
+        case (.blur(let left), .blur(let right)):
+            return left.rect != right.rect
+        case (.mosaic(let left), .mosaic(let right)):
+            return left.rect != right.rect
         default:
             return true
         }
@@ -954,7 +1134,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         case .movingAnnotation:
             NSCursor.closedHand.set()
             return
-        case .resizingRectangle, .resizingHighlight, .resizingText, .editingArrowEndpoint, .drawingRectangle, .drawingArrow, .drawingHighlight:
+        case .resizingRectangle, .resizingHighlight, .resizingBlur, .resizingMosaic, .resizingText, .editingArrowEndpoint, .drawingRectangle, .drawingArrow, .drawingHighlight, .drawingBlur, .drawingMosaic:
             NSCursor.crosshair.set()
             return
         case .editingText:
@@ -965,7 +1145,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
 
         switch selectedTool {
-        case .rectangle, .arrow, .highlight:
+        case .rectangle, .arrow, .highlight, .blur, .mosaic:
             if canvasTransform.displayedImageRect.contains(viewPoint) {
                 NSCursor.crosshair.set()
             } else {
@@ -985,9 +1165,9 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             }
 
             switch hit {
-            case .rectangleHandle(_, let handle), .textHandle(_, let handle), .highlightHandle(_, let handle):
+            case .rectangleHandle(_, let handle), .textHandle(_, let handle), .highlightHandle(_, let handle), .blurHandle(_, let handle), .mosaicHandle(_, let handle):
                 cursor(for: handle).set()
-            case .rectangleBody, .arrowBody, .textBody, .highlightBody:
+            case .rectangleBody, .arrowBody, .textBody, .highlightBody, .blurBody, .mosaicBody:
                 NSCursor.openHand.set()
             case .arrowEndpoint:
                 NSCursor.crosshair.set()
@@ -1028,6 +1208,17 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
     }
 
+    private func isDrawingEffectPreview(_ annotation: AnnotationItem) -> Bool {
+        switch interactionState {
+        case .drawingBlur:
+            return annotation.blur != nil
+        case .drawingMosaic:
+            return annotation.mosaic != nil
+        default:
+            return false
+        }
+    }
+
     private static func imagePixelSize(for image: NSImage) -> CGSize {
         if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             return CGSize(width: cgImage.width, height: cgImage.height)
@@ -1056,6 +1247,10 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             return "text rect=\(debugRect(text.rect)) value=\(text.text)"
         case .highlight(let highlight):
             return "highlight rect=\(debugRect(highlight.rect))"
+        case .blur(let blur):
+            return "blur rect=\(debugRect(blur.rect)) radius=\(blur.radius)"
+        case .mosaic(let mosaic):
+            return "mosaic rect=\(debugRect(mosaic.rect)) blockSize=\(mosaic.blockSize)"
         }
     }
 
@@ -1069,12 +1264,20 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             return "drawingArrow start=\(debugPoint(start)) current=\(debugPoint(current))"
         case .drawingHighlight(let start, let current):
             return "drawingHighlight start=\(debugPoint(start)) current=\(debugPoint(current))"
+        case .drawingBlur(let start, let current):
+            return "drawingBlur start=\(debugPoint(start)) current=\(debugPoint(current))"
+        case .drawingMosaic(let start, let current):
+            return "drawingMosaic start=\(debugPoint(start)) current=\(debugPoint(current))"
         case .movingAnnotation(let id, let startMouse, _):
             return "movingAnnotation id=\(id) startMouse=\(debugPoint(startMouse))"
         case .resizingRectangle(let id, let handle, let startMouse, let originalRect):
             return "resizingRectangle id=\(id) handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
         case .resizingHighlight(let id, let handle, let startMouse, let originalRect):
             return "resizingHighlight id=\(id) handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
+        case .resizingBlur(let id, let handle, let startMouse, let originalRect):
+            return "resizingBlur id=\(id) handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
+        case .resizingMosaic(let id, let handle, let startMouse, let originalRect):
+            return "resizingMosaic id=\(id) handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
         case .resizingText(let id, let handle, let startMouse, let originalRect):
             return "resizingText id=\(id) handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
         case .editingArrowEndpoint(let id, let endpoint, let startMouse, let originalArrow):
@@ -1097,6 +1300,8 @@ private extension EditorCanvasView {
     enum Metrics {
         static let minimumRectangleSize: CGFloat = 5
         static let minimumHighlightSize: CGFloat = 5
+        static let minimumBlurSize: CGFloat = 5
+        static let minimumMosaicSize: CGFloat = 5
         static let minimumArrowLength: CGFloat = 8
         static let defaultTextFontSize: CGFloat = 24
         static let defaultTextBounds = CGSize(width: 160, height: 44)
@@ -1116,9 +1321,13 @@ private extension EditorCanvasView {
         case drawingRectangle(start: CGPoint, current: CGPoint)
         case drawingArrow(start: CGPoint, current: CGPoint)
         case drawingHighlight(start: CGPoint, current: CGPoint)
+        case drawingBlur(start: CGPoint, current: CGPoint)
+        case drawingMosaic(start: CGPoint, current: CGPoint)
         case movingAnnotation(id: UUID, startMouse: CGPoint, originalAnnotation: AnnotationItem)
         case resizingRectangle(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
         case resizingHighlight(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
+        case resizingBlur(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
+        case resizingMosaic(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
         case resizingText(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
         case editingArrowEndpoint(id: UUID, endpoint: ArrowEndpoint, startMouse: CGPoint, originalArrow: ArrowAnnotation)
         case editingText(id: UUID)
@@ -1133,6 +1342,10 @@ private extension EditorCanvasView {
         case textBody(id: UUID)
         case highlightHandle(id: UUID, handle: ResizeHandle)
         case highlightBody(id: UUID)
+        case blurHandle(id: UUID, handle: ResizeHandle)
+        case blurBody(id: UUID)
+        case mosaicHandle(id: UUID, handle: ResizeHandle)
+        case mosaicBody(id: UUID)
 
         var annotationID: UUID {
             switch self {
@@ -1143,7 +1356,11 @@ private extension EditorCanvasView {
                     .textHandle(let id, _),
                     .textBody(let id),
                     .highlightHandle(let id, _),
-                    .highlightBody(let id):
+                    .highlightBody(let id),
+                    .blurHandle(let id, _),
+                    .blurBody(let id),
+                    .mosaicHandle(let id, _),
+                    .mosaicBody(let id):
                 id
             }
         }

@@ -1,8 +1,11 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import OSLog
 
 enum AnnotationRenderer {
+    private static let logger = Logger(subsystem: "com.ethan.snapnook", category: "AnnotationRenderer")
+
     enum SelectionStyle {
         static let outlineColor = NSColor.systemBlue
         static let handleFillColor = NSColor.white
@@ -56,6 +59,10 @@ enum AnnotationRenderer {
             drawTextSelection(text, in: context, transform: transform)
         case .highlight(let highlight):
             drawHighlightSelection(highlight, in: context, transform: transform)
+        case .blur(let blur):
+            drawBlurSelection(blur, in: context, transform: transform)
+        case .mosaic(let mosaic):
+            drawMosaicSelection(mosaic, in: context, transform: transform)
         }
     }
 
@@ -68,6 +75,20 @@ enum AnnotationRenderer {
 
     static func highlightHandleRects(
         for annotation: HighlightAnnotation,
+        transform: CanvasTransform
+    ) -> [ResizeHandle: CGRect] {
+        handleRects(for: annotation.rect, transform: transform)
+    }
+
+    static func blurHandleRects(
+        for annotation: BlurAnnotation,
+        transform: CanvasTransform
+    ) -> [ResizeHandle: CGRect] {
+        handleRects(for: annotation.rect, transform: transform)
+    }
+
+    static func mosaicHandleRects(
+        for annotation: MosaicAnnotation,
         transform: CanvasTransform
     ) -> [ResizeHandle: CGRect] {
         handleRects(for: annotation.rect, transform: transform)
@@ -143,15 +164,19 @@ enum AnnotationRenderer {
         in context: CGContext,
         transform: CanvasTransform
     ) {
-        switch annotation {
-        case .rectangle(let rectangle):
-            drawRectangle(rectangle, in: context, transform: transform)
-        case .arrow(let arrow):
-            drawArrow(arrow, in: context, transform: transform)
-        case .text(let text):
-            drawText(text, in: context, transform: transform)
-        case .highlight:
-            break
+        do {
+            switch annotation {
+            case .rectangle(let rectangle):
+                try drawRectangle(rectangle, in: context, transform: transform)
+            case .arrow(let arrow):
+                try drawArrow(arrow, in: context, transform: transform)
+            case .text(let text):
+                try drawText(text, in: context, transform: transform)
+            case .highlight, .blur, .mosaic:
+                break
+            }
+        } catch {
+            logger.error("Skipping annotation \(annotation.id.uuidString, privacy: .public) during render: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -159,8 +184,11 @@ enum AnnotationRenderer {
         _ annotation: RectangleAnnotation,
         in context: CGContext,
         transform: CanvasTransform
-    ) {
+    ) throws {
         let viewRect = transform.imageRectToViewRect(annotation.rect)
+        guard viewRect.origin.x.isFinite, viewRect.origin.y.isFinite, viewRect.width.isFinite, viewRect.height.isFinite else {
+            throw AnnotationRenderError.invalidRect
+        }
         let lineWidth = scaledLineWidth(annotation.lineWidth, transform: transform)
 
         context.saveGState()
@@ -175,9 +203,17 @@ enum AnnotationRenderer {
         _ annotation: ArrowAnnotation,
         in context: CGContext,
         transform: CanvasTransform
-    ) {
+    ) throws {
         let startPoint = transform.imagePointToViewPoint(annotation.startPoint)
         let endPoint = transform.imagePointToViewPoint(annotation.endPoint)
+        guard
+            startPoint.x.isFinite,
+            startPoint.y.isFinite,
+            endPoint.x.isFinite,
+            endPoint.y.isFinite
+        else {
+            throw AnnotationRenderError.invalidPoint
+        }
         let lineWidth = scaledLineWidth(annotation.lineWidth, transform: transform)
 
         context.saveGState()
@@ -193,10 +229,14 @@ enum AnnotationRenderer {
         _ annotation: TextAnnotation,
         in context: CGContext,
         transform: CanvasTransform
-    ) {
+    ) throws {
         guard annotation.text.isEmpty == false else { return }
 
         let rect = textBoundingRect(for: annotation, transform: transform)
+        guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width.isFinite, rect.height.isFinite else {
+            throw AnnotationRenderError.invalidRect
+        }
+        guard rect.width >= 1, rect.height >= 1 else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: scaledFont(for: annotation, transform: transform),
             .foregroundColor: annotation.color
@@ -224,7 +264,12 @@ enum AnnotationRenderer {
         let path = CGMutablePath()
         path.addRect(displayedImageRect)
         for annotation in annotations {
-            path.addRect(transform.imageRectToViewRect(annotation.rect))
+            let rect = transform.imageRectToViewRect(annotation.rect)
+            guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width.isFinite, rect.height.isFinite else {
+                logger.error("Skipping highlight \(annotation.id.uuidString, privacy: .public) due to invalid rect.")
+                continue
+            }
+            path.addRect(rect)
         }
 
         context.saveGState()
@@ -323,6 +368,57 @@ enum AnnotationRenderer {
         }
     }
 
+    private static func drawBlurSelection(
+        _ annotation: BlurAnnotation,
+        in context: CGContext,
+        transform: CanvasTransform
+    ) {
+        drawRectSelection(annotation.rect, handleRects: blurHandleRects(for: annotation, transform: transform), in: context, transform: transform)
+    }
+
+    private static func drawMosaicSelection(
+        _ annotation: MosaicAnnotation,
+        in context: CGContext,
+        transform: CanvasTransform
+    ) {
+        drawRectSelection(annotation.rect, handleRects: mosaicHandleRects(for: annotation, transform: transform), in: context, transform: transform)
+    }
+
+    static func drawDraftRect(
+        _ rect: CGRect,
+        in context: CGContext,
+        transform: CanvasTransform
+    ) {
+        let viewRect = transform.imageRectToViewRect(rect)
+        context.saveGState()
+        context.setFillColor(NSColor.white.withAlphaComponent(0.08).cgColor)
+        context.fill(viewRect)
+        context.setStrokeColor(SelectionStyle.outlineColor.withAlphaComponent(0.7).cgColor)
+        context.setLineWidth(1.5)
+        context.setLineDash(phase: 0, lengths: SelectionStyle.dashPattern)
+        context.stroke(viewRect)
+        context.restoreGState()
+    }
+
+    private static func drawRectSelection(
+        _ rect: CGRect,
+        handleRects: [ResizeHandle: CGRect],
+        in context: CGContext,
+        transform: CanvasTransform
+    ) {
+        let rect = transform.imageRectToViewRect(rect).insetBy(dx: -2, dy: -2)
+        context.saveGState()
+        context.setStrokeColor(SelectionStyle.outlineColor.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineDash(phase: 0, lengths: SelectionStyle.dashPattern)
+        context.stroke(rect)
+        context.restoreGState()
+
+        for rect in handleRects.values {
+            drawHandle(in: rect, context: context)
+        }
+    }
+
     private static func strokeArrowPath(
         from startPoint: CGPoint,
         to endPoint: CGPoint,
@@ -381,7 +477,8 @@ enum AnnotationRenderer {
 
     private static func scaledFont(for annotation: TextAnnotation, transform: CanvasTransform) -> NSFont {
         let scale = max(0.01, transform.displayedImageRect.width / max(transform.imageSize.width, 1))
-        let fontSize = max(8, annotation.fontSize * scale)
+        let baseFontSize = annotation.fontSize > 0 && annotation.fontSize.isFinite ? annotation.fontSize : 24
+        let fontSize = max(8, baseFontSize * scale)
         if let fontName = annotation.fontName, let font = NSFont(name: fontName, size: fontSize) {
             return font
         }
@@ -389,4 +486,18 @@ enum AnnotationRenderer {
         return .systemFont(ofSize: fontSize)
     }
 
+}
+
+private enum AnnotationRenderError: LocalizedError {
+    case invalidRect
+    case invalidPoint
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidRect:
+            return "annotation rect is invalid"
+        case .invalidPoint:
+            return "annotation point is invalid"
+        }
+    }
 }

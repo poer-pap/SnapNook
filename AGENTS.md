@@ -58,13 +58,13 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 - `Sources/SnapNook/Editor/CanvasTransform.swift`
   计算编辑画布中的 `displayedImageRect`，并负责 view/image 坐标互转。
 - `Sources/SnapNook/Editor/AnnotationItem.swift`
-  编辑器标注数据模型；当前支持矩形、箭头、文字和高亮，统一保存为原始图片坐标；`TextAnnotation` / `HighlightAnnotation` 使用 `rect`。
+  编辑器标注数据模型；当前支持矩形、箭头、文字、高亮、模糊和马赛克，统一保存为原始图片坐标；`TextAnnotation` / `HighlightAnnotation` / `BlurAnnotation` / `MosaicAnnotation` 使用 `rect`。
 - `Sources/SnapNook/Editor/AnnotationRenderer.swift`
-  标注渲染器；负责将图片坐标标注转换到当前视图坐标并绘制；`Highlight` 使用“区域外变暗、区域内挖空”的聚光灯效果。
+  标注渲染器；负责将图片坐标标注转换到当前视图坐标并绘制；`Highlight` 使用“区域外变暗、区域内挖空”的聚光灯效果；`Blur` / `Mosaic` 使用矩形选中框和控制点。
 - `Sources/SnapNook/Editor/EditorTool.swift`
-  编辑器工具枚举；当前工具栏仅启用 `Select`、`Rectangle`、`Arrow`。
+  编辑器工具枚举；当前工具栏启用 `Select`、`Rectangle`、`Arrow`、`Text`、`Highlight`、`Blur`、`Mosaic`。
 - `Sources/SnapNook/Editor/EditorCanvasView.swift`
-  编辑器画布；显示原图，处理拖拽创建矩形/箭头/高亮、点击创建文字框、`Select` 模式下的命中检测、选中状态、二次编辑入口，以及 `Backspace` 删除选中标注。
+  编辑器画布；显示原图，处理拖拽创建矩形/箭头/高亮/模糊/马赛克、点击创建文字框、`Select` 模式下的命中检测、选中状态、二次编辑入口，以及 `Backspace` 删除选中标注。
 - `Sources/SnapNook/Editor/ScreenshotEditorView.swift`
   编辑窗口根视图，组合顶部工具栏和画布区域。
 - `Sources/SnapNook/Editor/EditorToolbarView.swift`
@@ -72,7 +72,9 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 - `Sources/SnapNook/Editor/UndoRedoManager.swift`
   编辑器命令式撤销/重做管理；当前用于新增和更新标注的 undo / redo。
 - `Sources/SnapNook/Editor/EditedImageExporter.swift`
-  导出编辑结果；输出“原图 + 当前标注”的合成 PNG。
+  导出编辑结果；输出“原图 + 当前标注”的合成 PNG，支持 `Highlight` 聚光灯以及 `Blur` / `Mosaic` 区域效果。
+- `Sources/SnapNook/Editor/ImageEffectProcessor.swift`
+  编辑器图像效果处理；负责生成和绘制 `Blur` / `Mosaic` 的预览与导出效果，输入坐标统一为 image coordinate。
 - `Sources/SnapNook/Editor/ScreenshotEditorWindowController.swift`
   编辑窗口生命周期、工具切换、标注状态、撤销/重做和导出协调。
 - `Sources/SnapNook/AlertPresenter.swift`
@@ -144,6 +146,10 @@ open .build/SnapNook.app
 29. `TextAnnotation` 选中后必须可移动、可通过 `8` 个控制点调整大小；双击文字框应再次进入编辑；导出时只导出文字内容，不导出编辑态边框和控制点。
 30. 编辑窗口选择 `Highlight` 工具后，拖拽创建的区域应表现为聚光灯效果：区域内保持原图，区域外统一变暗；选中后必须支持移动和 `8` 个控制点缩放。
 31. `Select` 工具下选中任意 `Rectangle` / `Arrow` / `Text` / `Highlight` 后，按 `Backspace` 应删除该标注；若当前正在编辑文字，则 `Backspace` 只能删除文本内容，不能误删整个标注。
+32. 编辑窗口选择 `Blur` 工具后，拖拽创建的区域应只在框内显示模糊效果；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
+33. 编辑窗口选择 `Mosaic` 工具后，拖拽创建的区域应只在框内显示马赛克效果；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
+34. `Select` 工具下点击已有 `Blur` / `Mosaic` 必须选中该标注；选中后支持移动、`8` 个控制点缩放和 `Backspace` 删除。
+35. 编辑窗口 `Save as...` 导出时，`Blur` / `Mosaic` 必须只作用于各自 rect 内，区域外保持原图，不导出选中框、控制点或辅助虚线。
 
 ## V1 范围边界
 
@@ -159,39 +165,45 @@ open .build/SnapNook.app
 
 除非有明确需求，不要提前为这些功能铺设抽象层。
 
-## V2 阶段 2 范围
+## V2 当前范围
 
 当前已实现并允许继续维护的编辑能力仅包括：
 - 矩形标注
 - 箭头标注
 - 文字标注
 - 高亮标注
+- 模糊区域
+- 马赛克区域
 - `Select` 模式下的标注命中检测与选中
 - 矩形的二次编辑入口：移动、控制点缩放
 - 箭头的二次编辑入口：整体移动、起点/终点调整
 - 文字框的创建、再次编辑、移动、控制点缩放
 - 高亮框的移动、控制点缩放、聚光灯渲染
+- 模糊框的移动、控制点缩放、区域内模糊渲染
+- 马赛克框的移动、控制点缩放、区域内马赛克渲染
 - `CanvasTransform` 坐标转换
 - `Backspace` 删除选中标注
 - 命令式 `Undo` / `Redo` 数据结构仍可保留，但当前工具栏不显示对应按钮
 - 编辑后 `Save as...` 导出合成图
 
 当前不要实现以下编辑能力：
-- 模糊
-- 马赛克
 - 裁剪
 - OCR
 - 复杂图层面板
 
-阶段 2 的实现约束：
+当前阶段的实现约束：
 - 标注数据必须保存为原始图片坐标，不要保存窗口坐标。
 - 鼠标事件和 hit testing 使用 view coordinate；判断命中前先通过 `CanvasTransform` 将标注转换到 view coordinate。
 - 控制点大小、命中容错范围使用固定 view 像素值，不跟随图片缩放。
 - 预览渲染必须通过坐标转换叠加在原图之上，不要直接修改 `originalImage`。
 - `TextAnnotation` 必须保存 `rect`，不要只保存 `origin`。
 - `HighlightAnnotation` 必须导出聚光灯效果，即区域外变暗、区域内保持原图。
+- `BlurAnnotation` / `MosaicAnnotation` 必须保存 `rect`，不要保存 view coordinate。
+- `Blur` / `Mosaic` 只允许在各自 rect 内生效，区域外保持原图。
 - 选中框、控制点、辅助虚线只允许在编辑器预览中显示，不能参与导出。
 - 导出时必须基于原始截图尺寸重绘标注，保证导出结果和编辑器预览一致。
+- `EditedImageExporter` 导出时，原始 `CGImage` 和 `Blur` / `Mosaic` 效果图必须先在未翻转的 bitmap `CGContext` 中绘制，避免保存结果上下反转。
+- 只有绘制 `AnnotationRenderer` 标注前才翻转导出 `CGContext`；`Blur` / `Mosaic` 导出裁剪 rect 需要从 image coordinate 转换到 CoreGraphics 的下左原点坐标。
 - 当前已知稳定策略是：新标注创建完成后自动切回 `Select`，降低“二次点击无效”风险。
 
 ## 修改约束

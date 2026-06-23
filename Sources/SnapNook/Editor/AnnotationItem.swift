@@ -7,6 +7,8 @@ enum AnnotationItem: Identifiable {
     case arrow(ArrowAnnotation)
     case text(TextAnnotation)
     case highlight(HighlightAnnotation)
+    case blur(BlurAnnotation)
+    case mosaic(MosaicAnnotation)
 
     var id: UUID {
         switch self {
@@ -17,6 +19,10 @@ enum AnnotationItem: Identifiable {
         case .text(let annotation):
             annotation.id
         case .highlight(let annotation):
+            annotation.id
+        case .blur(let annotation):
+            annotation.id
+        case .mosaic(let annotation):
             annotation.id
         }
     }
@@ -31,6 +37,10 @@ enum AnnotationItem: Identifiable {
             annotation.color
         case .highlight(let annotation):
             NSColor.black.withAlphaComponent(annotation.dimOpacity)
+        case .blur:
+            .clear
+        case .mosaic:
+            .clear
         }
     }
 
@@ -43,6 +53,10 @@ enum AnnotationItem: Identifiable {
         case .text:
             0
         case .highlight:
+            0
+        case .blur:
+            0
+        case .mosaic:
             0
         }
     }
@@ -64,6 +78,16 @@ enum AnnotationItem: Identifiable {
 
     var highlight: HighlightAnnotation? {
         guard case .highlight(let annotation) = self else { return nil }
+        return annotation
+    }
+
+    var blur: BlurAnnotation? {
+        guard case .blur(let annotation) = self else { return nil }
+        return annotation
+    }
+
+    var mosaic: MosaicAnnotation? {
+        guard case .mosaic(let annotation) = self else { return nil }
         return annotation
     }
 
@@ -91,6 +115,16 @@ enum AnnotationItem: Identifiable {
     func updatingHighlight(_ rect: CGRect) -> AnnotationItem {
         guard case .highlight(let annotation) = self else { return self }
         return .highlight(annotation.updatingRect(rect))
+    }
+
+    func updatingBlur(_ rect: CGRect) -> AnnotationItem {
+        guard case .blur(let annotation) = self else { return self }
+        return .blur(annotation.updatingRect(rect))
+    }
+
+    func updatingMosaic(_ rect: CGRect) -> AnnotationItem {
+        guard case .mosaic(let annotation) = self else { return self }
+        return .mosaic(annotation.updatingRect(rect))
     }
 }
 
@@ -210,6 +244,46 @@ struct HighlightAnnotation: Identifiable {
 
     func updatingRect(_ rect: CGRect) -> HighlightAnnotation {
         HighlightAnnotation(id: id, rect: rect, dimOpacity: dimOpacity)
+    }
+}
+
+struct BlurAnnotation: Identifiable {
+    let id: UUID
+    let rect: CGRect
+    let radius: CGFloat
+
+    init(
+        id: UUID = UUID(),
+        rect: CGRect,
+        radius: CGFloat = 16
+    ) {
+        self.id = id
+        self.rect = rect
+        self.radius = radius
+    }
+
+    func updatingRect(_ rect: CGRect) -> BlurAnnotation {
+        BlurAnnotation(id: id, rect: rect, radius: radius)
+    }
+}
+
+struct MosaicAnnotation: Identifiable {
+    let id: UUID
+    let rect: CGRect
+    let blockSize: CGFloat
+
+    init(
+        id: UUID = UUID(),
+        rect: CGRect,
+        blockSize: CGFloat = 16
+    ) {
+        self.id = id
+        self.rect = rect
+        self.blockSize = blockSize
+    }
+
+    func updatingRect(_ rect: CGRect) -> MosaicAnnotation {
+        MosaicAnnotation(id: id, rect: rect, blockSize: blockSize)
     }
 }
 
