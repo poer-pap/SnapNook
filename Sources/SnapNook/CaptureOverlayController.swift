@@ -121,9 +121,7 @@ private final class CaptureOverlayWindow: NSWindow {
 
 private final class CaptureOverlayView: NSView {
     private enum Style {
-        static let screenshotBackdropAlpha: CGFloat = 0.36
         static let screenshotBorderWidth: CGFloat = 2
-        static let textBackdropAlpha: CGFloat = 0.14
         static let textFillAlpha: CGFloat = 0.25
         static let textBorderWidth: CGFloat = 1.5
         static let textLabelPadding = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
@@ -205,13 +203,7 @@ private final class CaptureOverlayView: NSView {
     }
 
     private func drawScreenshotOverlay() {
-        NSColor.black.withAlphaComponent(Style.screenshotBackdropAlpha).setFill()
-        bounds.fill()
-
         guard let selection = selectionRect else { return }
-
-        NSColor.clear.setFill()
-        selection.fill(using: .destinationOut)
 
         NSColor.white.setStroke()
         let path = NSBezierPath(rect: selection)
@@ -220,9 +212,6 @@ private final class CaptureOverlayView: NSView {
     }
 
     private func drawTextOverlay() {
-        NSColor.black.withAlphaComponent(Style.textBackdropAlpha).setFill()
-        bounds.fill()
-
         guard let selection = selectionRect else { return }
 
         NSColor.white.withAlphaComponent(Style.textFillAlpha).setFill()

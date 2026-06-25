@@ -37,10 +37,12 @@ V1 的目标是提供稳定的基础区域截图能力：
   App 入口。
 - `Sources/SnapNook/AppDelegate.swift`
   应用生命周期、菜单栏和快捷键注册。
+- `Sources/SnapNook/KeyboardShortcuts+Names.swift`
+  全局快捷键名称与默认值；`Capture Area` 默认 `Option + Shift + S`，`Capture Text` 默认不占用快捷键。
 - `Sources/SnapNook/StatusItemController.swift`
   菜单栏菜单。
 - `Sources/SnapNook/PreferencesWindowController.swift`
-  Preferences 窗口和快捷键设置界面。
+  Preferences 窗口和快捷键设置界面；当前支持编辑 `Capture Area` 和 `Capture Text` 快捷键。
 - `Sources/SnapNook/CaptureCoordinator.swift`
   截图主流程协调。
 - `Sources/SnapNook/ScreenCapturePermissionService.swift`
@@ -92,7 +94,7 @@ V1 的目标是提供稳定的基础区域截图能力：
 - `Resources/Info.plist`
   App bundle 元数据。
 - `scripts/build_app.sh`
-  构建并组装 `.app`。
+  构建并组装 `.app`；必须将 SwiftPM 依赖生成的 `*.bundle` 资源复制到 `.app/Contents/Resources`。
 
 ## 构建与运行
 
@@ -121,13 +123,15 @@ bash scripts/build_app.sh
 open .build/SnapNook.app
 ```
 
+`KeyboardShortcuts.Recorder` 依赖 SwiftPM 资源 bundle 中的本地化字符串。`scripts/build_app.sh` 打包 `.app` 时必须保留 `KeyboardShortcuts_KeyboardShortcuts.bundle`，否则点击 `Preferences` 创建 recorder 时会因 `Bundle.module` 找不到资源触发 `EXC_BREAKPOINT / SIGTRAP` 闪退。
+
 ## 测试重点
 
 每次修改后至少手动验证以下流程：
 
 1. App 启动后只显示菜单栏图标/标题，不显示 Dock 主窗口。
 2. 菜单包含 `Capture Area`、`Capture Text`、`Preferences`、`Quit`。
-3. `Preferences` 中可设置全局快捷键，默认值为 `Option + Shift + S`。
+3. `Preferences` 中可设置 `Capture Area` 和 `Capture Text` 全局快捷键；`Capture Area` 默认值为 `Option + Shift + S`，`Capture Text` 默认不占用快捷键。
 4. 无权限时，触发截图会弹出授权提示，并能打开系统设置。
 5. 有权限时，触发截图会进入半透明遮罩模式。
 6. 拖拽选区后会完成截图。
@@ -218,6 +222,7 @@ V1 的目标是基础区域截图能力，目前已经完成。
 - 识别语言当前限定为 `zh-Hans`、`en-US`
 - OCR 成功后自动复制纯文本到剪贴板
 - OCR 空结果不覆盖已有剪贴板内容
+- 可在 `Preferences` 中为 `Capture Text` 设置全局快捷键
 - 通过轻量 HUD 提示 `Recognizing text.` / `Text copied.` / `No text recognized.` / `OCR failed.`
 
 当前不要实现以下 OCR 能力：
@@ -225,7 +230,6 @@ V1 的目标是基础区域截图能力，目前已经完成。
 - OCR 历史记录
 - OCR 自动翻译
 - OCR 结构化导出
-- `Capture Text` 全局快捷键
 
 当前阶段的 OCR 实现约束：
 - `Capture Text` 不是普通截图，不得显示浮动预览、保存面板或编辑器。

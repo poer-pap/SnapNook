@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyUp(for: .captureArea) { [weak self] in
             self?.captureCoordinator.captureArea()
         }
+
+        KeyboardShortcuts.onKeyUp(for: .captureText) { [weak self] in
+            self?.captureCoordinator.captureText()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
