@@ -28,6 +28,13 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     }
     var onCommitCommand: ((EditorCommand) -> Void)?
     var onSelectionChange: ((UUID?) -> Void)?
+    var onRequestToolChange: ((EditorTool) -> Void)?
+    private(set) var activeCropRect: CGRect? {
+        didSet {
+            syncTextEditorFrameIfNeeded()
+            needsDisplay = true
+        }
+    }
 
     private let image: NSImage
     private let imageCGImage: CGImage?
@@ -36,6 +43,11 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     private var trackingArea: NSTrackingArea?
     private var interactionState: EditorInteractionState = .idle
     private var previewAnnotation: AnnotationItem? {
+        didSet {
+            needsDisplay = true
+        }
+    }
+    private var cropState: CropState? {
         didSet {
             needsDisplay = true
         }
@@ -103,17 +115,11 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         let displayedImageRect = transform.displayedImageRect
         guard displayedImageRect.width > 0, displayedImageRect.height > 0 else { return }
 
-        image.draw(
-            in: displayedImageRect,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1,
-            respectFlipped: true,
-            hints: [.interpolation: NSImageInterpolation.high]
-        )
-
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        drawImage(in: context, transform: transform)
         let visibleAnnotations = annotationsForDisplay()
+        context.saveGState()
+        context.clip(to: displayedImageRect)
         imageEffectProcessor?.drawPreviewEffects(
             for: visibleAnnotations,
             displayedImageRect: displayedImageRect,
@@ -130,6 +136,11 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             if let rect {
                 AnnotationRenderer.drawDraftRect(rect, in: context, transform: transform)
             }
+        }
+        context.restoreGState()
+
+        if selectedTool == .crop, let cropState, cropState.isActive {
+            AnnotationRenderer.drawCropOverlay(cropRect: cropState.rect, in: context, transform: transform)
         }
     }
 
@@ -161,6 +172,8 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
 
         switch selectedTool {
+        case .crop:
+            beginCropInteraction(at: viewPoint)
         case .rectangle:
             beginDrawingRectangle(at: viewPoint)
         case .arrow:
@@ -175,8 +188,6 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             beginTextCreation(at: viewPoint)
         case .select:
             beginSelectionInteraction(at: viewPoint, clickCount: event.clickCount)
-        default:
-            super.mouseDown(with: event)
         }
     }
 
@@ -197,6 +208,12 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == KeyCode.deleteKey || event.keyCode == KeyCode.forwardDeleteKey {
             deleteSelectedAnnotationIfNeeded()
+            return
+        }
+
+        if event.keyCode == KeyCode.escapeKey, selectedTool == .crop {
+            cancelCropMode()
+            onRequestToolChange?(.select)
             return
         }
 
@@ -229,8 +246,47 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         needsDisplay = true
     }
 
+    func enterCropMode() {
+        if case .editingText = interactionState {
+            finishActiveTextEditing(commit: true)
+        }
+
+        let rect = activeCropRect ?? CropState.defaultRect(in: imageBounds)
+        cropState = CropState(rect: clampedRect(rect), isActive: true)
+        setInteractionState(.idle)
+        previewAnnotation = nil
+        notifySelectionChange(nil)
+        updateCursor(for: lastMouseLocationInView)
+    }
+
+    func applyCropMode() {
+        guard let cropState else { return }
+        let rect = clampedRect(cropState.rect).integral
+        activeCropRect = rect == imageBounds ? nil : rect
+        self.cropState = nil
+        setInteractionState(.idle)
+        needsDisplay = true
+        updateCursor(for: lastMouseLocationInView)
+    }
+
+    func cancelCropMode() {
+        cropState = nil
+        setInteractionState(.idle)
+        previewAnnotation = nil
+        needsDisplay = true
+        updateCursor(for: lastMouseLocationInView)
+    }
+
     private var canvasTransform: CanvasTransform {
-        CanvasTransform(imageSize: imageSize, containerRect: bounds.insetBy(dx: 32, dy: 24))
+        CanvasTransform(
+            imageSize: imageSize,
+            visibleImageRect: activeCropRect ?? imageBounds,
+            containerRect: bounds.insetBy(dx: 32, dy: 24)
+        )
+    }
+
+    private var imageBounds: CGRect {
+        CGRect(origin: .zero, size: imageSize)
     }
 
     private func annotationsForDisplay() -> [AnnotationItem] {
@@ -441,10 +497,41 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
     }
 
+    private func beginCropInteraction(at viewPoint: CGPoint) {
+        guard let cropState else { return }
+
+        switch hitTestCrop(at: viewPoint, transform: canvasTransform, cropRect: cropState.rect) {
+        case .handle(let handle):
+            setInteractionState(.resizingCrop(
+                handle: handle,
+                startMouse: viewPoint,
+                originalRect: cropState.rect
+            ))
+        case .body:
+            setInteractionState(.movingCrop(
+                startMouse: viewPoint,
+                originalRect: cropState.rect
+            ))
+        case .outside:
+            break
+        }
+    }
+
     private func updateInteractionPreview(with viewPoint: CGPoint) {
         switch interactionState {
         case .idle, .editingText:
             return
+        case .movingCrop(let startMouse, let originalRect):
+            let delta = imageDelta(from: startMouse, to: viewPoint)
+            cropState?.rect = movedCropRect(originalRect, by: delta)
+        case .resizingCrop(let handle, _, let originalRect):
+            let currentImagePoint = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
+            cropState?.rect = resizedRectangle(
+                originalRect: originalRect,
+                handle: handle,
+                currentImagePoint: currentImagePoint,
+                minimumSize: Metrics.minimumCropSize
+            )
         case .drawingRectangle(let start, _):
             let current = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
             setInteractionState(.drawingRectangle(start: start, current: current))
@@ -551,6 +638,8 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
 
         switch interactionState {
         case .idle, .editingText:
+            return
+        case .movingCrop, .resizingCrop:
             return
         case .drawingRectangle(let start, _):
             let end = canvasTransform.clampedImagePoint(fromViewPoint: viewPoint)
@@ -903,6 +992,16 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         return CGPoint(x: endPoint.x - startPoint.x, y: endPoint.y - startPoint.y)
     }
 
+    private func movedCropRect(_ rect: CGRect, by delta: CGPoint) -> CGRect {
+        let movedRect = CGRect(
+            x: rect.origin.x + delta.x,
+            y: rect.origin.y + delta.y,
+            width: rect.width,
+            height: rect.height
+        )
+        return clampedRect(movedRect)
+    }
+
     private func movedAnnotation(_ annotation: AnnotationItem, by delta: CGPoint) -> AnnotationItem {
         switch annotation {
         case .rectangle(let rectangle):
@@ -1069,10 +1168,10 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
 
     private func clampedRect(_ rect: CGRect) -> CGRect {
         var clamped = rect
+        clamped.size.width = min(max(clamped.size.width, 0), imageSize.width)
+        clamped.size.height = min(max(clamped.size.height, 0), imageSize.height)
         clamped.origin.x = min(max(clamped.origin.x, 0), max(0, imageSize.width - clamped.width))
         clamped.origin.y = min(max(clamped.origin.y, 0), max(0, imageSize.height - clamped.height))
-        clamped.size.width = min(clamped.size.width, imageSize.width)
-        clamped.size.height = min(clamped.size.height, imageSize.height)
         return clamped
     }
 
@@ -1129,12 +1228,49 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
     }
 
+    private func drawImage(in context: CGContext, transform: CanvasTransform) {
+        let fullImageViewRect = transform.imageRectToViewRect(imageBounds)
+        context.saveGState()
+        context.clip(to: transform.displayedImageRect)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        image.draw(
+            in: fullImageViewRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        context.restoreGState()
+    }
+
+    private func hitTestCrop(
+        at viewPoint: CGPoint,
+        transform: CanvasTransform,
+        cropRect: CGRect
+    ) -> CropHitTarget {
+        for handle in ResizeHandle.allCases {
+            if AnnotationRenderer.cropHandleRects(for: cropRect, transform: transform)[handle]?.contains(viewPoint) == true {
+                return .handle(handle)
+            }
+        }
+
+        let rect = transform.imageRectToViewRect(cropRect)
+        if rect.contains(viewPoint) {
+            return .body
+        }
+
+        return .outside
+    }
+
     private func updateCursor(for viewPoint: CGPoint) {
         switch interactionState {
-        case .movingAnnotation:
+        case .movingAnnotation, .movingCrop:
             NSCursor.closedHand.set()
             return
-        case .resizingRectangle, .resizingHighlight, .resizingBlur, .resizingMosaic, .resizingText, .editingArrowEndpoint, .drawingRectangle, .drawingArrow, .drawingHighlight, .drawingBlur, .drawingMosaic:
+        case .resizingRectangle, .resizingHighlight, .resizingBlur, .resizingMosaic, .resizingText, .resizingCrop, .editingArrowEndpoint, .drawingRectangle, .drawingArrow, .drawingHighlight, .drawingBlur, .drawingMosaic:
             NSCursor.crosshair.set()
             return
         case .editingText:
@@ -1145,6 +1281,20 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         }
 
         switch selectedTool {
+        case .crop:
+            guard let cropState else {
+                NSCursor.arrow.set()
+                return
+            }
+
+            switch hitTestCrop(at: viewPoint, transform: canvasTransform, cropRect: cropState.rect) {
+            case .handle(let handle):
+                cursor(for: handle).set()
+            case .body:
+                NSCursor.openHand.set()
+            case .outside:
+                NSCursor.arrow.set()
+            }
         case .rectangle, .arrow, .highlight, .blur, .mosaic:
             if canvasTransform.displayedImageRect.contains(viewPoint) {
                 NSCursor.crosshair.set()
@@ -1172,8 +1322,6 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             case .arrowEndpoint:
                 NSCursor.crosshair.set()
             }
-        default:
-            NSCursor.arrow.set()
         }
     }
 
@@ -1189,7 +1337,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     }
 
     private func scaledEditingFont(for fontSize: CGFloat) -> NSFont {
-        let scale = max(0.01, canvasTransform.displayedImageRect.width / max(imageSize.width, 1))
+        let scale = max(0.01, canvasTransform.displayedImageRect.width / max(canvasTransform.visibleImageRect.width, 1))
         return .systemFont(ofSize: max(8, fontSize * scale))
     }
 
@@ -1268,6 +1416,10 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             return "drawingBlur start=\(debugPoint(start)) current=\(debugPoint(current))"
         case .drawingMosaic(let start, let current):
             return "drawingMosaic start=\(debugPoint(start)) current=\(debugPoint(current))"
+        case .movingCrop(let startMouse, let originalRect):
+            return "movingCrop startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
+        case .resizingCrop(let handle, let startMouse, let originalRect):
+            return "resizingCrop handle=\(handle) startMouse=\(debugPoint(startMouse)) rect=\(debugRect(originalRect))"
         case .movingAnnotation(let id, let startMouse, _):
             return "movingAnnotation id=\(id) startMouse=\(debugPoint(startMouse))"
         case .resizingRectangle(let id, let handle, let startMouse, let originalRect):
@@ -1298,6 +1450,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
 
 private extension EditorCanvasView {
     enum Metrics {
+        static let minimumCropSize: CGFloat = 20
         static let minimumRectangleSize: CGFloat = 5
         static let minimumHighlightSize: CGFloat = 5
         static let minimumBlurSize: CGFloat = 5
@@ -1323,6 +1476,8 @@ private extension EditorCanvasView {
         case drawingHighlight(start: CGPoint, current: CGPoint)
         case drawingBlur(start: CGPoint, current: CGPoint)
         case drawingMosaic(start: CGPoint, current: CGPoint)
+        case movingCrop(startMouse: CGPoint, originalRect: CGRect)
+        case resizingCrop(handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
         case movingAnnotation(id: UUID, startMouse: CGPoint, originalAnnotation: AnnotationItem)
         case resizingRectangle(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
         case resizingHighlight(id: UUID, handle: ResizeHandle, startMouse: CGPoint, originalRect: CGRect)
@@ -1364,6 +1519,12 @@ private extension EditorCanvasView {
                 id
             }
         }
+    }
+
+    enum CropHitTarget {
+        case body
+        case handle(ResizeHandle)
+        case outside
     }
 
     final class ActiveTextEdit {

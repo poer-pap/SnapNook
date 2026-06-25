@@ -35,11 +35,13 @@ enum AnnotationRenderer {
     static func draw(
         annotations: [AnnotationItem],
         in context: CGContext,
-        imageSize: CGSize
+        imageSize: CGSize,
+        visibleImageRect: CGRect? = nil
     ) {
         let transform = CanvasTransform(
             imageSize: imageSize,
-            containerRect: CGRect(origin: .zero, size: imageSize)
+            visibleImageRect: visibleImageRect,
+            canvasSize: visibleImageRect?.size ?? imageSize
         )
 
         draw(annotations: annotations, in: context, transform: transform)
@@ -157,6 +159,38 @@ enum AnnotationRenderer {
         )
 
         return rect.insetBy(dx: -12, dy: -12)
+    }
+
+    static func cropHandleRects(
+        for rect: CGRect,
+        transform: CanvasTransform
+    ) -> [ResizeHandle: CGRect] {
+        handleRects(for: rect, transform: transform)
+    }
+
+    static func drawCropOverlay(
+        cropRect: CGRect,
+        in context: CGContext,
+        transform: CanvasTransform
+    ) {
+        let displayedImageRect = transform.displayedImageRect
+        let viewCropRect = transform.imageRectToViewRect(cropRect)
+        let path = CGMutablePath()
+        path.addRect(displayedImageRect)
+        path.addRect(viewCropRect)
+
+        context.saveGState()
+        context.addPath(path)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+        context.drawPath(using: .eoFill)
+        context.restoreGState()
+
+        drawRectSelection(
+            cropRect,
+            handleRects: cropHandleRects(for: cropRect, transform: transform),
+            in: context,
+            transform: transform
+        )
     }
 
     private static func draw(
@@ -471,12 +505,12 @@ enum AnnotationRenderer {
             return lineWidth
         }
 
-        let scale = transform.displayedImageRect.width / transform.imageSize.width
+        let scale = transform.displayedImageRect.width / max(transform.visibleImageRect.width, 1)
         return max(1, lineWidth * scale)
     }
 
     private static func scaledFont(for annotation: TextAnnotation, transform: CanvasTransform) -> NSFont {
-        let scale = max(0.01, transform.displayedImageRect.width / max(transform.imageSize.width, 1))
+        let scale = max(0.01, transform.displayedImageRect.width / max(transform.visibleImageRect.width, 1))
         let baseFontSize = annotation.fontSize > 0 && annotation.fontSize.isFinite ? annotation.fontSize : 24
         let fontSize = max(8, baseFontSize * scale)
         if let fontName = annotation.fontName, let font = NSFont(name: fontName, size: fontSize) {

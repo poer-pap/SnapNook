@@ -13,6 +13,7 @@ final class EditedImageExporter {
         originalPNGData: Data,
         createdAt: Date,
         annotations: [AnnotationItem],
+        activeCropRect: CGRect?,
         from window: NSWindow,
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
@@ -38,7 +39,8 @@ final class EditedImageExporter {
                 let renderedData = try self.renderedPNGData(
                     originalImage: originalImage,
                     fallbackPNGData: originalPNGData,
-                    annotations: annotations
+                    annotations: annotations,
+                    activeCropRect: activeCropRect
                 )
                 print("[Save] rendered data size:", renderedData.count)
                 do {
@@ -57,9 +59,10 @@ final class EditedImageExporter {
     private func renderedPNGData(
         originalImage: NSImage,
         fallbackPNGData: Data,
-        annotations: [AnnotationItem]
+        annotations: [AnnotationItem],
+        activeCropRect: CGRect?
     ) throws -> Data {
-        guard annotations.isEmpty == false else {
+        guard annotations.isEmpty == false || activeCropRect != nil else {
             print("[Exporter] annotations count: 0, using fallback PNG data:", fallbackPNGData.count)
             return fallbackPNGData
         }
@@ -75,14 +78,19 @@ final class EditedImageExporter {
             return try ScreenshotWriter.pngData(from: originalImage)
         }
 
-        let width = originalCGImage.width
-        let height = originalCGImage.height
-        guard width > 0, height > 0 else {
-            throw ScreenshotWriterError.invalidImageSize(width: CGFloat(width), height: CGFloat(height))
+        let sourceWidth = originalCGImage.width
+        let sourceHeight = originalCGImage.height
+        guard sourceWidth > 0, sourceHeight > 0 else {
+            throw ScreenshotWriterError.invalidImageSize(width: CGFloat(sourceWidth), height: CGFloat(sourceHeight))
         }
 
+        let imageSize = CGSize(width: sourceWidth, height: sourceHeight)
+        let imageBounds = CGRect(origin: .zero, size: imageSize)
+        let exportRect = sanitizedCropRect(activeCropRect, imageBounds: imageBounds)
         let effectProcessor = ImageEffectProcessor(sourceImage: originalCGImage)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let width = Int(exportRect.width)
+        let height = Int(exportRect.height)
         guard let context = CGContext(
             data: nil,
             width: width,
@@ -95,14 +103,31 @@ final class EditedImageExporter {
             throw EditedImageExporterError.failedToCreateBitmapContext
         }
 
-        let imageSize = CGSize(width: width, height: height)
         context.interpolationQuality = .high
-        context.draw(originalCGImage, in: CGRect(origin: .zero, size: imageSize))
-        effectProcessor.drawExportEffects(for: annotations, in: context, imageSize: imageSize)
+        context.draw(
+            originalCGImage,
+            in: CGRect(
+                x: -exportRect.minX,
+                y: -(imageSize.height - exportRect.maxY),
+                width: imageSize.width,
+                height: imageSize.height
+            )
+        )
+        effectProcessor.drawExportEffects(
+            for: annotations,
+            in: context,
+            imageSize: imageSize,
+            activeCropRect: exportRect
+        )
 
-        context.translateBy(x: 0, y: imageSize.height)
+        context.translateBy(x: 0, y: exportRect.height)
         context.scaleBy(x: 1, y: -1)
-        AnnotationRenderer.draw(annotations: annotations, in: context, imageSize: imageSize)
+        AnnotationRenderer.draw(
+            annotations: annotations,
+            in: context,
+            imageSize: imageSize,
+            visibleImageRect: exportRect
+        )
 
         guard let renderedCGImage = context.makeImage() else {
             throw EditedImageExporterError.failedToCreateRenderedImage
@@ -115,6 +140,19 @@ final class EditedImageExporter {
         print("[Exporter] pngData size:", pngData.count)
         logger.notice("Rendered edited image with \(annotations.count, privacy: .public) annotations.")
         return pngData
+    }
+
+    private func sanitizedCropRect(_ cropRect: CGRect?, imageBounds: CGRect) -> CGRect {
+        guard let cropRect else {
+            return imageBounds
+        }
+
+        let sanitized = cropRect.standardized.intersection(imageBounds).integral
+        guard sanitized.width >= 1, sanitized.height >= 1 else {
+            return imageBounds
+        }
+
+        return sanitized
     }
 }
 

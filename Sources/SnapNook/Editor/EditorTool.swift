@@ -12,6 +12,7 @@ enum EditorTool: String, CaseIterable {
 
     static let toolbarTools: [EditorTool] = [
         .select,
+        .crop,
         .rectangle,
         .arrow,
         .text,

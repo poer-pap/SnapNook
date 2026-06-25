@@ -2,19 +2,32 @@ import CoreGraphics
 
 struct CanvasTransform {
     let imageSize: CGSize
+    let visibleImageRect: CGRect
     let containerRect: CGRect
     let displayedImageRect: CGRect
 
-    init(imageSize: CGSize, containerRect: CGRect) {
+    init(imageSize: CGSize, visibleImageRect: CGRect? = nil, containerRect: CGRect) {
         self.imageSize = imageSize
+        self.visibleImageRect = Self.sanitizedVisibleImageRect(imageSize: imageSize, visibleImageRect: visibleImageRect)
         self.containerRect = containerRect
-        self.displayedImageRect = Self.makeDisplayedImageRect(imageSize: imageSize, containerRect: containerRect)
+        self.displayedImageRect = Self.makeDisplayedImageRect(
+            visibleImageRect: self.visibleImageRect,
+            containerRect: containerRect
+        )
+    }
+
+    init(imageSize: CGSize, visibleImageRect: CGRect? = nil, canvasSize: CGSize) {
+        self.init(
+            imageSize: imageSize,
+            visibleImageRect: visibleImageRect,
+            containerRect: CGRect(origin: .zero, size: canvasSize)
+        )
     }
 
     func viewPointToImagePoint(_ point: CGPoint) -> CGPoint? {
         guard
-            imageSize.width > 0,
-            imageSize.height > 0,
+            visibleImageRect.width > 0,
+            visibleImageRect.height > 0,
             displayedImageRect.width > 0,
             displayedImageRect.height > 0,
             displayedImageRect.contains(point)
@@ -26,23 +39,23 @@ struct CanvasTransform {
         let normalizedY = (point.y - displayedImageRect.minY) / displayedImageRect.height
 
         return CGPoint(
-            x: normalizedX * imageSize.width,
-            y: normalizedY * imageSize.height
+            x: visibleImageRect.minX + normalizedX * visibleImageRect.width,
+            y: visibleImageRect.minY + normalizedY * visibleImageRect.height
         )
     }
 
     func imagePointToViewPoint(_ point: CGPoint) -> CGPoint {
         guard
-            imageSize.width > 0,
-            imageSize.height > 0,
+            visibleImageRect.width > 0,
+            visibleImageRect.height > 0,
             displayedImageRect.width > 0,
             displayedImageRect.height > 0
         else {
             return displayedImageRect.origin
         }
 
-        let normalizedX = point.x / imageSize.width
-        let normalizedY = point.y / imageSize.height
+        let normalizedX = (point.x - visibleImageRect.minX) / visibleImageRect.width
+        let normalizedY = (point.y - visibleImageRect.minY) / visibleImageRect.height
 
         return CGPoint(
             x: displayedImageRect.minX + normalizedX * displayedImageRect.width,
@@ -84,19 +97,19 @@ struct CanvasTransform {
         return viewPointToImagePoint(CGPoint(x: clampedX, y: clampedY)) ?? .zero
     }
 
-    private static func makeDisplayedImageRect(imageSize: CGSize, containerRect: CGRect) -> CGRect {
+    private static func makeDisplayedImageRect(visibleImageRect: CGRect, containerRect: CGRect) -> CGRect {
         guard
-            imageSize.width > 0,
-            imageSize.height > 0,
+            visibleImageRect.width > 0,
+            visibleImageRect.height > 0,
             containerRect.width > 0,
             containerRect.height > 0
         else {
             return .zero
         }
 
-        let scale = min(containerRect.width / imageSize.width, containerRect.height / imageSize.height)
-        let width = imageSize.width * scale
-        let height = imageSize.height * scale
+        let scale = min(containerRect.width / visibleImageRect.width, containerRect.height / visibleImageRect.height)
+        let width = visibleImageRect.width * scale
+        let height = visibleImageRect.height * scale
 
         return CGRect(
             x: containerRect.midX - width / 2,
@@ -113,5 +126,19 @@ struct CanvasTransform {
             width: abs(end.x - start.x),
             height: abs(end.y - start.y)
         )
+    }
+
+    private static func sanitizedVisibleImageRect(imageSize: CGSize, visibleImageRect: CGRect?) -> CGRect {
+        let imageBounds = CGRect(origin: .zero, size: imageSize)
+        guard let visibleImageRect else {
+            return imageBounds
+        }
+
+        let sanitized = visibleImageRect.standardized.intersection(imageBounds)
+        guard sanitized.width > 0, sanitized.height > 0 else {
+            return imageBounds
+        }
+
+        return sanitized
     }
 }

@@ -2,10 +2,13 @@ import AppKit
 
 final class EditorToolbarView: NSView {
     var onSelectTool: ((EditorTool) -> Void)?
+    var onApplyCrop: (() -> Void)?
+    var onCancelCrop: (() -> Void)?
     var onSaveAs: (() -> Void)?
     var onDone: (() -> Void)?
 
     private var toolButtons: [EditorTool: NSButton] = [:]
+    private let cropActionsStack = NSStackView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -31,6 +34,10 @@ final class EditorToolbarView: NSView {
 
     func updateHistoryButtons(canUndo: Bool, canRedo: Bool) {}
 
+    func updateCropActions(isVisible: Bool) {
+        cropActionsStack.isHidden = isVisible == false
+    }
+
     private func buildLayout() {
         let toolsStack = NSStackView()
         toolsStack.orientation = .horizontal
@@ -44,7 +51,15 @@ final class EditorToolbarView: NSView {
             toolsStack.addArrangedSubview(button)
         }
 
+        cropActionsStack.orientation = .horizontal
+        cropActionsStack.spacing = 8
+        cropActionsStack.translatesAutoresizingMaskIntoConstraints = false
+        cropActionsStack.addArrangedSubview(makeButton(title: "Apply", action: #selector(applyCropTapped)))
+        cropActionsStack.addArrangedSubview(makeButton(title: "Cancel", action: #selector(cancelCropTapped)))
+        cropActionsStack.isHidden = true
+
         let actionsStack = NSStackView(views: [
+            cropActionsStack,
             makeButton(title: "Save as...", action: #selector(saveAsTapped)),
             makeButton(title: "Done", action: #selector(doneTapped))
         ])
@@ -95,6 +110,14 @@ final class EditorToolbarView: NSView {
 
     @objc private func saveAsTapped() {
         onSaveAs?()
+    }
+
+    @objc private func applyCropTapped() {
+        onApplyCrop?()
+    }
+
+    @objc private func cancelCropTapped() {
+        onCancelCrop?()
     }
 
     @objc private func doneTapped() {

@@ -14,6 +14,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         didSet {
             editorLogger.notice("Editor selected tool: \(self.selectedTool.rawValue, privacy: .public).")
             editorView.toolbarView.updateSelection(selectedTool)
+            editorView.toolbarView.updateCropActions(isVisible: selectedTool == .crop)
             editorView.canvasView.selectedTool = selectedTool
         }
     }
@@ -71,13 +72,22 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
 
     private func configureActions() {
         editorView.toolbarView.onSelectTool = { [weak self] tool in
-            self?.selectedTool = tool
+            self?.selectTool(tool)
+        }
+        editorView.toolbarView.onApplyCrop = { [weak self] in
+            self?.applyCrop()
+        }
+        editorView.toolbarView.onCancelCrop = { [weak self] in
+            self?.cancelCrop()
         }
         editorView.canvasView.onCommitCommand = { [weak self] command in
             self?.applyAndRecord(command)
         }
         editorView.canvasView.onSelectionChange = { [weak self] selection in
             self?.selectedAnnotationID = selection
+        }
+        editorView.canvasView.onRequestToolChange = { [weak self] tool in
+            self?.selectedTool = tool
         }
         editorView.toolbarView.onSaveAs = { [weak self] in
             self?.saveAs()
@@ -87,6 +97,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         }
         editorView.canvasView.selectedTool = selectedTool
         editorView.toolbarView.updateSelection(selectedTool)
+        editorView.toolbarView.updateCropActions(isVisible: selectedTool == .crop)
         editorView.canvasView.annotations = annotations
         editorView.canvasView.selectedAnnotationID = selectedAnnotationID
         updateToolbarState()
@@ -124,6 +135,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
             originalPNGData: item.pngData,
             createdAt: item.createdAt,
             annotations: annotations,
+            activeCropRect: editorView.canvasView.activeCropRect,
             from: window
         ) { result in
             switch result {
@@ -141,6 +153,28 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
             canUndo: undoRedoManager.canUndo,
             canRedo: undoRedoManager.canRedo
         )
+    }
+
+    private func selectTool(_ tool: EditorTool) {
+        if selectedTool == .crop, tool != .crop {
+            editorView.canvasView.cancelCropMode()
+        }
+
+        if tool == .crop {
+            editorView.canvasView.enterCropMode()
+        }
+
+        selectedTool = tool
+    }
+
+    private func applyCrop() {
+        editorView.canvasView.applyCropMode()
+        selectedTool = .select
+    }
+
+    private func cancelCrop() {
+        editorView.canvasView.cancelCropMode()
+        selectedTool = .select
     }
 
     private func apply(_ command: EditorCommand) {

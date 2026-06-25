@@ -25,6 +25,8 @@ final class ImageEffectProcessor {
         transform: CanvasTransform
     ) {
         guard displayedImageRect.isEmpty == false else { return }
+        let fullImageRect = CGRect(origin: .zero, size: transform.imageSize)
+        let fullImageViewRect = transform.imageRectToViewRect(fullImageRect)
 
         for annotation in annotations {
             guard let rect = effectRect(for: annotation, imageSize: transform.imageSize) else { continue }
@@ -37,7 +39,7 @@ final class ImageEffectProcessor {
             let path = NSBezierPath(rect: clipRect)
             path.addClip()
             NSImage(cgImage: processedImage, size: NSSize(width: sourceImage.width, height: sourceImage.height)).draw(
-                in: displayedImageRect,
+                in: fullImageViewRect,
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 1,
@@ -51,9 +53,16 @@ final class ImageEffectProcessor {
     func drawExportEffects(
         for annotations: [AnnotationItem],
         in context: CGContext,
-        imageSize: CGSize
+        imageSize: CGSize,
+        activeCropRect: CGRect? = nil
     ) {
-        let imageRect = CGRect(origin: .zero, size: imageSize)
+        let cropRect = activeCropRect ?? CGRect(origin: .zero, size: imageSize)
+        let imageRect = CGRect(
+            x: -cropRect.minX,
+            y: -(imageSize.height - cropRect.maxY),
+            width: imageSize.width,
+            height: imageSize.height
+        )
 
         for annotation in annotations {
             guard let rect = effectRect(for: annotation, imageSize: imageSize) else { continue }
@@ -63,16 +72,16 @@ final class ImageEffectProcessor {
             }
 
             context.saveGState()
-            context.clip(to: exportClipRect(from: rect, imageSize: imageSize))
+            context.clip(to: exportClipRect(from: rect, cropRect: cropRect))
             context.draw(processedImage, in: imageRect)
             context.restoreGState()
         }
     }
 
-    private func exportClipRect(from rect: CGRect, imageSize: CGSize) -> CGRect {
+    private func exportClipRect(from rect: CGRect, cropRect: CGRect) -> CGRect {
         CGRect(
-            x: rect.minX,
-            y: imageSize.height - rect.maxY,
+            x: rect.minX - cropRect.minX,
+            y: cropRect.maxY - rect.maxY,
             width: rect.width,
             height: rect.height
         )
