@@ -5,4 +5,6 @@ extension KeyboardShortcuts.Name {
         "captureArea",
         default: .init(.s, modifiers: [.option, .shift])
     )
+
+    static let captureText = Self("captureText")
 }

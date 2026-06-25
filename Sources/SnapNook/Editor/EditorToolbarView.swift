@@ -39,23 +39,17 @@ final class EditorToolbarView: NSView {
     }
 
     private func buildLayout() {
-        let toolsGroup = ToolGroupView()
-
         let toolsStack = NSStackView()
         toolsStack.orientation = .horizontal
         toolsStack.alignment = .centerY
-        toolsStack.spacing = 0
+        toolsStack.spacing = 10
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
 
-        EditorTool.toolbarTools.enumerated().forEach { index, tool in
+        EditorTool.toolbarTools.forEach { tool in
             let button = makeToolButton(for: tool, action: #selector(toolTapped(_:)))
             button.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
             toolButtons[tool] = button
             toolsStack.addArrangedSubview(button)
-
-            if index < EditorTool.toolbarTools.count - 1 {
-                toolsStack.addArrangedSubview(ToolSeparatorView())
-            }
         }
 
         cropActionsStack.orientation = .horizontal
@@ -74,32 +68,25 @@ final class EditorToolbarView: NSView {
         actionsStack.spacing = 8
         actionsStack.translatesAutoresizingMaskIntoConstraints = false
 
-        toolsGroup.addSubview(toolsStack)
-        addSubview(toolsGroup)
+        addSubview(toolsStack)
         addSubview(actionsStack)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 56),
 
-            toolsGroup.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            toolsGroup.centerYAnchor.constraint(equalTo: centerYAnchor),
-            toolsGroup.heightAnchor.constraint(equalToConstant: 36),
-
-            toolsStack.leadingAnchor.constraint(equalTo: toolsGroup.leadingAnchor),
-            toolsStack.trailingAnchor.constraint(equalTo: toolsGroup.trailingAnchor),
-            toolsStack.topAnchor.constraint(equalTo: toolsGroup.topAnchor),
-            toolsStack.bottomAnchor.constraint(equalTo: toolsGroup.bottomAnchor),
+            toolsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            toolsStack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             actionsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             actionsStack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            actionsStack.leadingAnchor.constraint(greaterThanOrEqualTo: toolsGroup.trailingAnchor, constant: 16)
+            actionsStack.leadingAnchor.constraint(greaterThanOrEqualTo: toolsStack.trailingAnchor, constant: 16)
         ])
     }
 
     private func makeToolButton(for tool: EditorTool, action: Selector) -> NSButton {
-        let button = SegmentedToolButton(image: tool.symbolImage, target: self, action: action)
-        button.toolTip = tool.rawValue
+        let button = NSButton(title: tool.rawValue, target: self, action: action)
+        button.bezelStyle = .rounded
         button.setButtonType(.toggle)
         return button
     }
@@ -136,107 +123,5 @@ final class EditorToolbarView: NSView {
 
     @objc private func doneTapped() {
         onDone?()
-    }
-}
-
-private final class ToolGroupView: NSView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.28, alpha: 1).cgColor
-        layer?.cornerRadius = 18
-        layer?.masksToBounds = true
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-private final class ToolSeparatorView: NSView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
-        widthAnchor.constraint(equalToConstant: 1).isActive = true
-        heightAnchor.constraint(equalToConstant: 22).isActive = true
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-private final class SegmentedToolButton: NSButton {
-    override var state: NSControl.StateValue {
-        didSet {
-            updateAppearance()
-        }
-    }
-
-    init(image: NSImage, target: AnyObject?, action: Selector) {
-        super.init(frame: .zero)
-        self.image = image
-        self.target = target
-        self.action = action
-        translatesAutoresizingMaskIntoConstraints = false
-        isBordered = false
-        imagePosition = .imageOnly
-        imageScaling = .scaleProportionallyDown
-        contentTintColor = .white
-        wantsLayer = true
-        layer?.cornerRadius = 18
-        layer?.masksToBounds = true
-
-        widthAnchor.constraint(equalToConstant: 48).isActive = true
-        heightAnchor.constraint(equalToConstant: 36).isActive = true
-        updateAppearance()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    private func updateAppearance() {
-        layer?.backgroundColor = state == .on
-            ? NSColor.systemBlue.cgColor
-            : NSColor.clear.cgColor
-        contentTintColor = .white
-    }
-}
-
-private extension EditorTool {
-    var symbolImage: NSImage {
-        let symbolName: String
-        switch self {
-        case .select:
-            symbolName = "cursorarrow"
-        case .crop:
-            symbolName = "crop"
-        case .arrow:
-            symbolName = "arrow.down.left"
-        case .rectangle:
-            symbolName = "rectangle"
-        case .text:
-            symbolName = "textformat"
-        case .highlight:
-            symbolName = "rectangle.inset.filled"
-        case .blur:
-            symbolName = "drop"
-        case .mosaic:
-            symbolName = "square.grid.3x3"
-        }
-
-        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: rawValue) {
-            return image
-        }
-
-        return NSImage(size: NSSize(width: 18, height: 18))
     }
 }
