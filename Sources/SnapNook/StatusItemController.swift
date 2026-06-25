@@ -5,6 +5,7 @@ final class StatusItemController {
 
     init(
         onCaptureArea: @escaping () -> Void,
+        onCaptureText: @escaping () -> Void,
         onPreferences: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
@@ -16,6 +17,7 @@ final class StatusItemController {
 
         let menu = NSMenu()
         menu.addItem(MenuActionItem(title: "Capture Area", actionHandler: onCaptureArea))
+        menu.addItem(MenuActionItem(title: "Capture Text", actionHandler: onCaptureText))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(MenuActionItem(title: "Preferences", actionHandler: onPreferences))
         menu.addItem(NSMenuItem.separator())

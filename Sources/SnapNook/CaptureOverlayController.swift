@@ -3,18 +3,25 @@ import OSLog
 
 private let overlayLogger = Logger(subsystem: "com.ethan.snapnook", category: "CaptureOverlay")
 
+enum CaptureSelectionMode {
+    case screenshot
+    case textOCR
+}
+
 enum CaptureOverlayResult {
     case captured(CGRect, CGRect)
     case cancelled
 }
 
 final class CaptureOverlayController {
+    private let mode: CaptureSelectionMode
     private let completion: (CaptureOverlayResult) -> Void
     private var windows: [CaptureOverlayWindow] = []
     private var didFinish = false
     private var didCleanup = false
 
-    init(completion: @escaping (CaptureOverlayResult) -> Void) {
+    init(mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+        self.mode = mode
         self.completion = completion
     }
 
@@ -27,7 +34,7 @@ final class CaptureOverlayController {
         NSApp.activate(ignoringOtherApps: true)
 
         windows = NSScreen.screens.map { screen in
-            CaptureOverlayWindow(screen: screen) { [weak self] result in
+            CaptureOverlayWindow(screen: screen, mode: mode) { [weak self] result in
                 self?.finish(result)
             }
         }
@@ -72,8 +79,8 @@ final class CaptureOverlayController {
 private final class CaptureOverlayWindow: NSWindow {
     private var didClose = false
 
-    init(screen: NSScreen, completion: @escaping (CaptureOverlayResult) -> Void) {
-        let overlayView = CaptureOverlayView(screen: screen, completion: completion)
+    init(screen: NSScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+        let overlayView = CaptureOverlayView(screen: screen, mode: mode, completion: completion)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
 
         contentView = overlayView
@@ -113,14 +120,27 @@ private final class CaptureOverlayWindow: NSWindow {
 }
 
 private final class CaptureOverlayView: NSView {
+    private enum Style {
+        static let screenshotBackdropAlpha: CGFloat = 0.36
+        static let screenshotBorderWidth: CGFloat = 2
+        static let textBackdropAlpha: CGFloat = 0.14
+        static let textFillAlpha: CGFloat = 0.25
+        static let textBorderWidth: CGFloat = 1.5
+        static let textLabelPadding = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
+        static let textLabelOffset: CGFloat = 8
+        static let minimumSelectionSize: CGFloat = 5
+    }
+
     private let screen: NSScreen
+    private let mode: CaptureSelectionMode
     private let completion: (CaptureOverlayResult) -> Void
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
     private var didComplete = false
 
-    init(screen: NSScreen, completion: @escaping (CaptureOverlayResult) -> Void) {
+    init(screen: NSScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
         self.screen = screen
+        self.mode = mode
         self.completion = completion
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         wantsLayer = true
@@ -142,18 +162,12 @@ private final class CaptureOverlayView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.36).setFill()
-        bounds.fill()
-
-        guard let selection = selectionRect else { return }
-
-        NSColor.clear.setFill()
-        selection.fill(using: .destinationOut)
-
-        NSColor.white.setStroke()
-        let path = NSBezierPath(rect: selection)
-        path.lineWidth = 2
-        path.stroke()
+        switch mode {
+        case .screenshot:
+            drawScreenshotOverlay()
+        case .textOCR:
+            drawTextOverlay()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -172,7 +186,9 @@ private final class CaptureOverlayView: NSView {
         overlayLogger.notice("Overlay mouse up.")
         currentPoint = convert(event.locationInWindow, from: nil)
 
-        guard let selection = selectionRect, selection.width >= 4, selection.height >= 4 else {
+        guard let selection = selectionRect,
+              selection.width >= Style.minimumSelectionSize,
+              selection.height >= Style.minimumSelectionSize else {
             complete(.cancelled)
             return
         }
@@ -186,6 +202,104 @@ private final class CaptureOverlayView: NSView {
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    private func drawScreenshotOverlay() {
+        NSColor.black.withAlphaComponent(Style.screenshotBackdropAlpha).setFill()
+        bounds.fill()
+
+        guard let selection = selectionRect else { return }
+
+        NSColor.clear.setFill()
+        selection.fill(using: .destinationOut)
+
+        NSColor.white.setStroke()
+        let path = NSBezierPath(rect: selection)
+        path.lineWidth = Style.screenshotBorderWidth
+        path.stroke()
+    }
+
+    private func drawTextOverlay() {
+        NSColor.black.withAlphaComponent(Style.textBackdropAlpha).setFill()
+        bounds.fill()
+
+        guard let selection = selectionRect else { return }
+
+        NSColor.white.withAlphaComponent(Style.textFillAlpha).setFill()
+        selection.fill()
+
+        NSColor.white.withAlphaComponent(0.95).setStroke()
+        let path = NSBezierPath(rect: selection)
+        path.lineWidth = Style.textBorderWidth
+        path.stroke()
+
+        drawSelectionSizeLabel(for: selection)
+    }
+
+    private func drawSelectionSizeLabel(for selection: NSRect) {
+        let pixelSize = selectionPixelSize(for: selection)
+        let label = "\(pixelSize.width)\n\(pixelSize.height)" as NSString
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .right
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraphStyle
+        ]
+
+        let textSize = label.boundingRect(
+            with: NSSize(width: 120, height: 80),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes
+        ).integral.size
+
+        let backgroundRect = NSRect(
+            x: selection.maxX + Style.textLabelOffset,
+            y: selection.minY - textSize.height - CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom) - Style.textLabelOffset,
+            width: textSize.width + CGFloat(Style.textLabelPadding.left + Style.textLabelPadding.right),
+            height: textSize.height + CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom)
+        )
+        let clampedRect = clampLabelRect(backgroundRect)
+
+        let labelBackground = NSBezierPath(roundedRect: clampedRect, xRadius: 6, yRadius: 6)
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        labelBackground.fill()
+
+        label.draw(
+            in: NSRect(
+                x: clampedRect.minX + CGFloat(Style.textLabelPadding.left),
+                y: clampedRect.minY + CGFloat(Style.textLabelPadding.bottom),
+                width: clampedRect.width - CGFloat(Style.textLabelPadding.left + Style.textLabelPadding.right),
+                height: clampedRect.height - CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom)
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    private func clampLabelRect(_ rect: NSRect) -> NSRect {
+        var adjusted = rect
+        if adjusted.maxX > bounds.maxX - 8 {
+            adjusted.origin.x = max(bounds.minX + 8, bounds.maxX - 8 - adjusted.width)
+        }
+        if adjusted.minX < bounds.minX + 8 {
+            adjusted.origin.x = bounds.minX + 8
+        }
+        if adjusted.minY < bounds.minY + 8 {
+            adjusted.origin.y = min(bounds.maxY - 8 - adjusted.height, selectionRect?.maxY ?? adjusted.minY + Style.textLabelOffset)
+        }
+        if adjusted.maxY > bounds.maxY - 8 {
+            adjusted.origin.y = bounds.maxY - 8 - adjusted.height
+        }
+        return adjusted
+    }
+
+    private func selectionPixelSize(for rect: NSRect) -> (width: Int, height: Int) {
+        let scale = window?.backingScaleFactor ?? screen.backingScaleFactor
+        return (
+            width: Int(round(rect.width * scale)),
+            height: Int(round(rect.height * scale))
+        )
     }
 
     private var selectionRect: NSRect? {

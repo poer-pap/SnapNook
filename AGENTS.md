@@ -7,7 +7,7 @@ SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
 V1 基础截图能力已经完成，当前阶段正在迭代和维护 V2 编辑器能力。
 V1 的目标是提供稳定的基础区域截图能力：
 - 菜单栏常驻
-- `Capture Area` / `Preferences` / `Quit` 菜单
+- `Capture Area` / `Capture Text` / `Preferences` / `Quit` 菜单
 - 全局快捷键
 - 权限检查与系统设置引导
 - 半透明全屏遮罩 + 拖拽选区
@@ -15,6 +15,11 @@ V1 的目标是提供稳定的基础区域截图能力：
 - 截图后显示左下角浮动预览
 - 预览中手动复制到剪贴板
 - 预览中手动保存 PNG 到用户选择的位置
+
+当前已进入 V3 OCR 迭代，首个交付范围是独立菜单栏能力 `Capture Text`：
+- 点击后进入独立的文字框选模式，不走截图浮动预览
+- 拖拽完成后自动截取选区原图，执行本地 OCR，并将识别文本复制到剪贴板
+- OCR 失败、无文字、识别中使用轻量 HUD 提示，不弹出打扰式确认框
 
 ## 当前技术方案
 
@@ -47,7 +52,11 @@ V1 的目标是提供稳定的基础区域截图能力：
 - `Sources/SnapNook/ScreenshotWriter.swift`
   PNG 数据编码和文件保存。
 - `Sources/SnapNook/ClipboardWriter.swift`
-  剪贴板写入。
+  剪贴板写入；当前同时支持图片与纯文本复制。
+- `Sources/SnapNook/OCRService.swift`
+  本地 OCR 服务；使用 Vision `VNRecognizeTextRequest` 识别中英文文本。
+- `Sources/SnapNook/ToastController.swift`
+  轻量 HUD 提示；用于 OCR 处理中、成功、空结果和失败提示。
 - `Sources/SnapNook/ScreenshotPreviewItem.swift`
   截图预览数据模型，持有 `NSImage`、PNG data、创建时间、截图区域和屏幕信息。
 - `Sources/SnapNook/ScreenshotPreviewController.swift`
@@ -117,7 +126,7 @@ open .build/SnapNook.app
 每次修改后至少手动验证以下流程：
 
 1. App 启动后只显示菜单栏图标/标题，不显示 Dock 主窗口。
-2. 菜单包含 `Capture Area`、`Preferences`、`Quit`。
+2. 菜单包含 `Capture Area`、`Capture Text`、`Preferences`、`Quit`。
 3. `Preferences` 中可设置全局快捷键，默认值为 `Option + Shift + S`。
 4. 无权限时，触发截图会弹出授权提示，并能打开系统设置。
 5. 有权限时，触发截图会进入半透明遮罩模式。
@@ -151,6 +160,13 @@ open .build/SnapNook.app
 33. 编辑窗口选择 `Mosaic` 工具后，拖拽创建的区域应只在框内显示马赛克效果；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
 34. `Select` 工具下点击已有 `Blur` / `Mosaic` 必须选中该标注；选中后支持移动、`8` 个控制点缩放和 `Backspace` 删除。
 35. 编辑窗口 `Save as...` 导出时，`Blur` / `Mosaic` 必须只作用于各自 rect 内，区域外保持原图，不导出选中框、控制点或辅助虚线。
+36. 点击 `Capture Text` 后，应进入独立的文字框选模式；选区样式与普通截图模式可区分，显示浅灰半透明矩形和右下角宽高数字。
+37. `Capture Text` 框选完成后，不显示浮动预览、不打开编辑器、不保存图片；而是直接对选区原图执行 OCR。
+38. `Capture Text` OCR 成功后，应自动将纯文本复制到剪贴板，并显示 `Text copied.` 提示。
+39. `Capture Text` 若未识别到文字，应显示 `No text recognized.`，且不能覆盖已有剪贴板内容。
+40. `Capture Text` 若 OCR 失败，应显示 `OCR failed.`；若正在识别，应显示 `Recognizing text...`。
+41. `Capture Text` 按 `ESC` 或拖拽宽高小于 `5 px` 时应取消，不截图、不 OCR、不复制。
+42. `Capture Text` 的宽高数字必须显示实际截图像素尺寸，不是 point；Retina 和多显示器下选区截图必须与普通 `Capture Area` 一致稳定。
 
 ## V1 已完成能力与历史边界
 
@@ -158,7 +174,6 @@ V1 的目标是基础区域截图能力，目前已经完成。
 下面的约束属于历史边界说明，避免后续维护时误解 V1 的设计目标。
 
 当前仍然不要实现以下功能：
-- OCR
 - 标注
 - 录屏
 - 滚动截图
@@ -191,8 +206,34 @@ V1 的目标是基础区域截图能力，目前已经完成。
 
 当前不要实现以下编辑能力：
 - 裁剪
-- OCR
 - 复杂图层面板
+
+## V3 当前范围
+
+当前已实现并允许继续维护的 OCR 能力仅包括：
+- 菜单栏入口 `Capture Text`
+- 复用区域框选 overlay，并区分 `screenshot` / `textOCR` 选择模式
+- 文字框选完成后直接截取选区原图，不显示浮动预览
+- 使用 Vision `VNRecognizeTextRequest` 做本地 OCR
+- 识别语言当前限定为 `zh-Hans`、`en-US`
+- OCR 成功后自动复制纯文本到剪贴板
+- OCR 空结果不覆盖已有剪贴板内容
+- 通过轻量 HUD 提示 `Recognizing text.` / `Text copied.` / `No text recognized.` / `OCR failed.`
+
+当前不要实现以下 OCR 能力：
+- OCR 结果编辑面板
+- OCR 历史记录
+- OCR 自动翻译
+- OCR 结构化导出
+- `Capture Text` 全局快捷键
+
+当前阶段的 OCR 实现约束：
+- `Capture Text` 不是普通截图，不得显示浮动预览、保存面板或编辑器。
+- OCR 必须基于选区原始截图，不得使用缩略图或预览图。
+- OCR 前必须先隐藏 overlay；必要时可延迟一小段时间截图，避免将选区框截入图片。
+- `CaptureOverlayController` 的 `textOCR` 模式应显示浅灰半透明填充、细边框和右下角像素尺寸。
+- 选区宽高小于 `5 px` 时直接取消，不进入 OCR。
+- 识别结果写剪贴板时，只有非空文本才允许 `clearContents()` 后写入；空结果不得覆盖原有内容。
 
 当前阶段的实现约束：
 - 标注数据必须保存为原始图片坐标，不要保存窗口坐标。
