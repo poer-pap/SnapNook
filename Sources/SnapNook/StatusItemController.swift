@@ -9,10 +9,19 @@ final class StatusItemController {
         onPreferences: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.title = "SnapNook"
+            if let image = NSImage(named: "SnapNookMenuBarTemplate") {
+                image.isTemplate = true
+                image.size = NSSize(width: 18, height: 18)
+                button.image = image
+                button.imagePosition = .imageOnly
+                button.toolTip = "SnapNook"
+                button.setAccessibilityLabel("SnapNook")
+            } else {
+                button.title = "SnapNook"
+            }
         }
 
         let menu = NSMenu()

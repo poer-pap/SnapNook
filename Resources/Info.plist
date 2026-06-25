@@ -6,6 +6,8 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>SnapNook</string>
+	<key>CFBundleIconFile</key>
+	<string>SnapNook.icns</string>
 	<key>CFBundleDisplayName</key>
 	<string>SnapNook</string>
 	<key>CFBundleIdentifier</key>
