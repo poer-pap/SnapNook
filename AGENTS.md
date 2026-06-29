@@ -273,6 +273,9 @@ V1 的目标是基础区域截图能力，目前已经完成。
   /usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.ethan.snapnook" OR process == "SnapNook"'
   ```
 - 当前已知风险点是 AppKit 窗口释放时机：
+  - `CaptureOverlayController` 的框选窗口必须保持非激活：使用 non-activating `NSPanel`，不要在开始截图或截取文字时调用 `NSApp.activate(ignoringOtherApps:)`、`makeMain()` 或其他会切走当前前台应用/窗口焦点的 API。
+  - 截图和 `Capture Text` 都必须支持在其他 App 的下拉菜单、弹出菜单等临时 UI 展开时触发；启动 overlay 不能导致这些 UI 因失焦而消失。
+  - overlay 可以成为 key window 并让 content view 成为 first responder，以接收拖拽和 `ESC`，但不能把 SnapNook 激活为前台应用。
   - `CaptureOverlayController` 管理的 overlay window 不要在 mouse event 回调中同步 `close()` 并立即释放数组。
   - 选区完成时应先 `orderOut(nil)` 隐藏遮罩，避免截图拍到遮罩。
   - 截图/取消流程结束后再 cleanup；cleanup 中延后一轮主循环关闭窗口。

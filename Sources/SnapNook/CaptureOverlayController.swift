@@ -31,7 +31,6 @@ final class CaptureOverlayController {
 
     func show() {
         overlayLogger.notice("Overlay show requested for \(NSScreen.screens.count) screen(s).")
-        NSApp.activate(ignoringOtherApps: true)
 
         windows = NSScreen.screens.map { screen in
             CaptureOverlayWindow(screen: screen, mode: mode) { [weak self] result in
@@ -76,12 +75,12 @@ final class CaptureOverlayController {
     }
 }
 
-private final class CaptureOverlayWindow: NSWindow {
+private final class CaptureOverlayWindow: NSPanel {
     private var didClose = false
 
     init(screen: NSScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
         let overlayView = CaptureOverlayView(screen: screen, mode: mode, completion: completion)
-        super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 
         contentView = overlayView
         isReleasedWhenClosed = false
@@ -94,13 +93,11 @@ private final class CaptureOverlayWindow: NSWindow {
     }
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
 
     func show() {
         overlayLogger.notice("Overlay window show.")
         orderFrontRegardless()
         makeKey()
-        makeMain()
         contentView?.window?.makeFirstResponder(contentView)
     }
 
