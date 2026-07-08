@@ -17,6 +17,21 @@ enum ScreenCapturer {
         return NSImage(cgImage: cgImage, size: rect.size)
     }
 
+    static func capture(rect: CGRect, screenFrame: CGRect, belowWindowID windowID: CGWindowID) -> NSImage? {
+        let captureRect = convertToCoreGraphicsRect(rect, screenFrame: screenFrame)
+
+        guard let cgImage = CGWindowListCreateImage(
+            captureRect,
+            .optionOnScreenBelowWindow,
+            windowID,
+            [.bestResolution]
+        ) else {
+            return nil
+        }
+
+        return NSImage(cgImage: cgImage, size: rect.size)
+    }
+
     private static func convertToCoreGraphicsRect(_ rect: CGRect, screenFrame: CGRect) -> CGRect {
         CGRect(
             x: rect.minX,

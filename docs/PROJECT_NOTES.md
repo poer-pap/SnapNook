@@ -8,6 +8,7 @@ SnapNook 是一个使用 Swift 开发的原生 macOS 菜单栏截图工具。应
 - 截图后浮动预览
 - 截图编辑器
 - `Capture Text` 本地 OCR
+- V4 `Scrolling Capture` 滚动截屏 MVP
 
 ## 技术方案
 
@@ -40,7 +41,9 @@ SnapNook 是一个使用 Swift 开发的原生 macOS 菜单栏截图工具。应
 - `Sources/SnapNook/CaptureOverlayController.swift`
   全屏框选 overlay、拖拽选区和 `ESC` 取消。
 - `Sources/SnapNook/ScreenCapturer.swift`
-  实际屏幕截取。
+  实际屏幕截取，包括普通区域截图和滚动截屏使用的 below-window 捕获辅助。
+- `Sources/SnapNook/ScrollingCapture/`
+  V4 滚动截屏模块，包含选择框 overlay、捕获控制器、实时预览面板和长图拼接器。
 - `Sources/SnapNook/ScreenshotWriter.swift`
   PNG 数据编码和文件保存。
 - `Sources/SnapNook/ClipboardWriter.swift`
@@ -80,6 +83,21 @@ SnapNook 是一个使用 Swift 开发的原生 macOS 菜单栏截图工具。应
 6. 用户可手动复制、保存、关闭或进入编辑器。
 
 截图完成后不自动保存到桌面或其他目录。保存只由用户点击预览中的 `Save` 触发。
+
+## 滚动截屏流程
+
+`Scrolling Capture` 是独立于普通区域截图和 OCR 的 V4 功能：
+
+1. 检查截图权限。
+2. 在当前鼠标所在屏幕显示滚动截屏选择框。
+3. 开始前选择框可移动、可通过边框和控制点调整大小。
+4. 点击 `Start Capture` 后固定选区，滚轮事件继续传递给底层网页或文档。
+5. 以低频连续捕获选区内容，并用 `ScrollingStitcher` 合成长图。
+6. 右侧显示长图缩略预览和当前高度，不显示帧数。
+7. 点击 `Done` 后复用现有浮动预览，用户可继续 `Copy`、`Save` 或 `Edit`。
+8. 点击 `Cancel` 或按 `ESC` 时清理临时状态，不保存、不复制、不显示浮动预览。
+
+当前 V4.0 仍是 MVP：主要支持手动向下滚动，不做自动滚动；对虚拟列表、视频、动画、动态加载区域或滚动过快场景，拼接可能不稳定。后续目标是接入 ScreenCaptureKit 连续捕获主路径。
 
 ## OCR 流程
 

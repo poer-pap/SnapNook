@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController = StatusItemController(
             onCaptureArea: { [weak self] in self?.captureCoordinator.captureArea() },
             onCaptureText: { [weak self] in self?.captureCoordinator.captureText() },
+            onScrollingCapture: { [weak self] in self?.captureCoordinator.scrollingCapture() },
             onPreferences: { [weak self] in self?.preferencesWindowController.show() },
             onQuit: { [weak self] in self?.quit() }
         )

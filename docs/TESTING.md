@@ -29,7 +29,7 @@ open .build/SnapNook.app
 ## 基础应用
 
 1. App 启动后只显示菜单栏图标/标题，不显示 Dock 主窗口。
-2. 菜单包含 `Capture Area`、`Capture Text`、`Preferences`、`Quit`。
+2. 菜单包含 `Capture Area`、`Capture Text`、`Scrolling Capture`、`Preferences`、`Quit`。
 3. `Preferences` 中可设置 `Capture Area` 和 `Capture Text` 全局快捷键。
 4. `Capture Area` 默认值为 `Option + Shift + S`。
 5. `Capture Text` 默认不占用快捷键。
@@ -42,6 +42,27 @@ open .build/SnapNook.app
 3. `ESC` 能取消截图。
 4. 拖拽宽高小于阈值时取消，不截图。
 5. overlay 不应激活 SnapNook，也不应导致其他 App 的菜单或弹窗因失焦消失。
+
+## Scrolling Capture
+
+1. 点击 `Scrolling Capture` 后出现默认选择框。
+2. 选择框中心区域拖动只移动选择框，不改变大小。
+3. 拖动边框或 8 个控制点才调整选择框大小。
+4. 选择框不能完全移出当前屏幕 `visibleFrame`。
+5. 点击 `Start Capture` 后选择框固定，不能移动或 resize。
+6. 捕获过程中底层网页或文档能正常响应鼠标滚轮。
+7. 捕获过程中屏幕不应因 overlay 反复隐藏和显示而闪烁。
+8. 右侧预览显示 `Capturing...` 和当前高度，不显示 `frames` 数量。
+9. 右侧预览显示的是当前长图缩略图，而不是最近一帧。
+10. 选择框、控制按钮和右侧预览面板不能被截进最终长图。
+11. 缓慢向下滚动时，最终长图应尽量连续，不应出现大块重复视口。
+12. 重复或几乎静止的画面不应明显增加长图高度。
+13. 点击 `Done` 后生成一张最终长图，并显示在现有浮动预览中。
+14. 最终长图可继续 `Copy`、`Save`、`Edit`。
+15. 点击 `Cancel` 放弃，不保存、不复制、不显示浮动预览。
+16. 捕获过程中按 `ESC` 等同于 `Cancel`。
+17. 连续多次启动和取消 `Scrolling Capture` 不应崩溃。
+18. 当前 V4.0 主要验证手动向下滚动；虚拟列表、动画区域、视频区域或滚动过快时拼接允许不完美，但不能崩溃。
 
 ## 浮动预览
 

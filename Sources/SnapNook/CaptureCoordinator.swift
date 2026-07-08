@@ -7,6 +7,7 @@ final class CaptureCoordinator {
     private enum ActiveFlow {
         case captureArea
         case captureText
+        case scrollingCapture
     }
 
     private let permissionService = ScreenCapturePermissionService()
@@ -14,6 +15,7 @@ final class CaptureCoordinator {
     private let ocrService = OCRService()
     private let toastController = ToastController()
     private var overlayController: CaptureOverlayController?
+    private var scrollingCaptureController: ScrollingCaptureController?
     private var activeFlow: ActiveFlow?
     private var ocrTask: Task<Void, Never>?
 
@@ -23,6 +25,33 @@ final class CaptureCoordinator {
 
     func captureText() {
         startCapture(flow: .captureText, mode: .textOCR)
+    }
+
+    func scrollingCapture() {
+        guard activeFlow == nil, overlayController == nil, ocrTask == nil, scrollingCaptureController == nil else {
+            captureLogger.notice("Ignoring duplicate scrolling capture request while busy.")
+            return
+        }
+
+        guard permissionService.hasPermission else {
+            captureLogger.notice("Screen capture permission missing.")
+            permissionService.requestPermission()
+            return
+        }
+
+        activeFlow = .scrollingCapture
+        let controller = ScrollingCaptureController(
+            onFinish: { [weak self] image, rect, screenFrame in
+                self?.handleScrollingCaptureFinished(image: image, rect: rect, screenFrame: screenFrame)
+            },
+            onCancel: { [weak self] in
+                captureLogger.notice("Scrolling capture cancelled.")
+                self?.scrollingCaptureController = nil
+                self?.activeFlow = nil
+            }
+        )
+        scrollingCaptureController = controller
+        controller.startSelection()
     }
 
     private func startCapture(flow: ActiveFlow, mode: CaptureSelectionMode) {
@@ -63,6 +92,8 @@ final class CaptureCoordinator {
             capture(rect: rect, screenFrame: screenFrame)
         case .captureText:
             recognizeText(in: rect, screenFrame: screenFrame)
+        case .scrollingCapture:
+            break
         }
     }
 
@@ -142,5 +173,25 @@ final class CaptureCoordinator {
                 }
             }
         }
+    }
+
+    private func handleScrollingCaptureFinished(image: NSImage, rect: CGRect, screenFrame: CGRect) {
+        do {
+            let item = ScreenshotPreviewItem(
+                image: image,
+                pngData: try ScreenshotWriter.pngData(from: image),
+                createdAt: Date(),
+                captureRect: rect,
+                screenFrame: screenFrame
+            )
+            previewController.show(item: item)
+            captureLogger.notice("Scrolling capture preview shown.")
+        } catch {
+            captureLogger.error("Scrolling capture PNG encoding failed: \(error.localizedDescription, privacy: .public).")
+            AlertPresenter.show(message: "Scrolling Capture failed.", informativeText: error.localizedDescription)
+        }
+
+        scrollingCaptureController = nil
+        activeFlow = nil
     }
 }
