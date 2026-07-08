@@ -1,111 +1,49 @@
-# SnapNook AGENTS.md
+# SnapNook Agent Guide
 
-## 项目简介
+This file contains stable working rules for AI coding agents in this repository.
+Keep detailed project background, current tasks, test checklists, and troubleshooting notes in `docs/`.
 
-SnapNook 是一个使用 Swift 开发的 macOS 菜单栏截图工具。
+## Project
 
-V1 基础截图能力已经完成，当前阶段正在迭代和维护 V2 编辑器能力。
-V1 的目标是提供稳定的基础区域截图能力：
-- 菜单栏常驻
-- `Capture Area` / `Capture Text` / `Preferences` / `Quit` 菜单
-- 全局快捷键
-- 权限检查与系统设置引导
-- 半透明全屏遮罩 + 拖拽选区
-- `ESC` 取消截图
-- 截图后显示左下角浮动预览
-- 预览中手动复制到剪贴板
-- 预览中手动保存 PNG 到用户选择的位置
+SnapNook is a native macOS menu bar screenshot utility written in Swift.
 
-当前已进入 V3 OCR 迭代，首个交付范围是独立菜单栏能力 `Capture Text`：
-- 点击后进入独立的文字框选模式，不走截图浮动预览
-- 拖拽完成后自动截取选区原图，执行本地 OCR，并将识别文本复制到剪贴板
-- OCR 失败、无文字、识别中使用轻量 HUD 提示，不弹出打扰式确认框
+Supported areas:
 
-## 当前技术方案
+- Area screenshot capture
+- Floating screenshot preview
+- Screenshot editor
+- Local OCR through `Capture Text`
+- Preferences for global shortcuts
 
-- 语言：Swift
-- UI：AppKit + SwiftUI 混合
-- 包管理：Swift Package Manager
-- 快捷键依赖：`sindresorhus/KeyboardShortcuts`
-- 应用形态：macOS 菜单栏工具，`LSUIElement = true`
+The app runs as a menu bar utility with `LSUIElement = true`. It should not show a Dock icon or a normal main window during regular use.
 
-## 项目结构
+## Reference Documents
 
-- `Package.swift`
-  SwiftPM 包配置和依赖声明。
-- `Sources/SnapNook/main.swift`
-  App 入口。
-- `Sources/SnapNook/AppDelegate.swift`
-  应用生命周期、菜单栏和快捷键注册。
-- `Sources/SnapNook/KeyboardShortcuts+Names.swift`
-  全局快捷键名称与默认值；`Capture Area` 默认 `Option + Shift + S`，`Capture Text` 默认不占用快捷键。
-- `Sources/SnapNook/StatusItemController.swift`
-  菜单栏菜单。
-- `Sources/SnapNook/PreferencesWindowController.swift`
-  Preferences 窗口和快捷键设置界面；当前支持编辑 `Capture Area` 和 `Capture Text` 快捷键。
-- `Sources/SnapNook/CaptureCoordinator.swift`
-  截图主流程协调。
-- `Sources/SnapNook/ScreenCapturePermissionService.swift`
-  屏幕录制/截图权限检查和引导。
-- `Sources/SnapNook/CaptureOverlayController.swift`
-  截图遮罩、拖拽选区、ESC 取消。
-- `Sources/SnapNook/ScreenCapturer.swift`
-  实际截图。
-- `Sources/SnapNook/ScreenshotWriter.swift`
-  PNG 数据编码和文件保存。
-- `Sources/SnapNook/ClipboardWriter.swift`
-  剪贴板写入；当前同时支持图片与纯文本复制。
-- `Sources/SnapNook/OCRService.swift`
-  本地 OCR 服务；使用 Vision `VNRecognizeTextRequest` 识别中英文文本。
-- `Sources/SnapNook/ToastController.swift`
-  轻量 HUD 提示；用于 OCR 处理中、成功、空结果和失败提示。
-- `Sources/SnapNook/ScreenshotPreviewItem.swift`
-  截图预览数据模型，持有 `NSImage`、PNG data、创建时间、截图区域和屏幕信息。
-- `Sources/SnapNook/ScreenshotPreviewController.swift`
-  截图后浮动预览窗口的生命周期、自动关闭、保存面板、固定尺寸和屏幕定位。
-- `Sources/SnapNook/ScreenshotPreviewPanel.swift`
-  透明无边框、非激活的浮动预览 `NSPanel`，固定尺寸为 `300x180`。
-- `Sources/SnapNook/ScreenshotPreviewView.swift`
-  固定尺寸预览缩略图、hover 操作按钮和 hover 毛玻璃背景。
-- `Sources/SnapNook/Editor/CanvasTransform.swift`
-  计算编辑画布中的 `displayedImageRect`，并负责 view/image 坐标互转。
-- `Sources/SnapNook/Editor/AnnotationItem.swift`
-  编辑器标注数据模型；当前支持矩形、箭头、文字、高亮、模糊和马赛克，统一保存为原始图片坐标；`TextAnnotation` / `HighlightAnnotation` / `BlurAnnotation` / `MosaicAnnotation` 使用 `rect`。
-- `Sources/SnapNook/Editor/AnnotationRenderer.swift`
-  标注渲染器；负责将图片坐标标注转换到当前视图坐标并绘制；`Highlight` 使用“区域外变暗、区域内挖空”的聚光灯效果；`Blur` / `Mosaic` 使用矩形选中框和控制点。
-- `Sources/SnapNook/Editor/EditorTool.swift`
-  编辑器工具枚举；当前工具栏启用 `Select`、`Rectangle`、`Arrow`、`Text`、`Highlight`、`Blur`、`Mosaic`。
-- `Sources/SnapNook/Editor/EditorCanvasView.swift`
-  编辑器画布；显示原图，处理拖拽创建矩形/箭头/高亮/模糊/马赛克、点击创建文字框、`Select` 模式下的命中检测、选中状态、二次编辑入口，以及 `Backspace` 删除选中标注。
-- `Sources/SnapNook/Editor/ScreenshotEditorView.swift`
-  编辑窗口根视图，组合顶部工具栏和画布区域。
-- `Sources/SnapNook/Editor/EditorToolbarView.swift`
-  编辑器顶部工具栏；提供工具选择、`Save as...`、`Done`。当前不显示 `Undo` / `Redo` 按钮。
-- `Sources/SnapNook/Editor/UndoRedoManager.swift`
-  编辑器命令式撤销/重做管理；当前用于新增和更新标注的 undo / redo。
-- `Sources/SnapNook/Editor/EditedImageExporter.swift`
-  导出编辑结果；输出“原图 + 当前标注”的合成 PNG，支持 `Highlight` 聚光灯以及 `Blur` / `Mosaic` 区域效果。
-- `Sources/SnapNook/Editor/ImageEffectProcessor.swift`
-  编辑器图像效果处理；负责生成和绘制 `Blur` / `Mosaic` 的预览与导出效果，输入坐标统一为 image coordinate。
-- `Sources/SnapNook/Editor/ScreenshotEditorWindowController.swift`
-  编辑窗口生命周期、工具切换、标注状态、撤销/重做和导出协调。
-- `Sources/SnapNook/AlertPresenter.swift`
-  失败提示。
-- `Resources/Info.plist`
-  App bundle 元数据。
-- `scripts/build_app.sh`
-  构建并组装 `.app`；必须将 SwiftPM 依赖生成的 `*.bundle` 资源复制到 `.app/Contents/Resources`。
+- `docs/PROJECT_NOTES.md`: long-term project background, architecture, module map, and design constraints.
+- `docs/TASKS.md`: current implementation scope, phase boundaries, and work rules.
+- `docs/TESTING.md`: manual verification checklist.
+- `docs/TROUBLESHOOTING.md`: crash analysis, build issues, and AppKit lifecycle notes.
 
-## 构建与运行
+Read the relevant document before changing related code.
 
-当前环境已验证可用的方式是使用 Xcode beta 的工具链，并显式指定 `DEVELOPER_DIR`：
+## Tech Stack
+
+- Language: Swift
+- UI: AppKit + SwiftUI
+- Package manager: Swift Package Manager
+- Shortcut dependency: `sindresorhus/KeyboardShortcuts`
+- OCR: Apple Vision `VNRecognizeTextRequest`
+- Minimum platform: macOS 13
+
+## Build
+
+Preferred verified command:
 
 ```sh
 env DEVELOPER_DIR=/Users/loners/Downloads/Xcode-beta.app/Contents/Developer bash scripts/build_app.sh
-open .build/SnapNook.app
 ```
 
-如果当前执行环境对用户目录写缓存有限制，导致 `swift build` / `build_app.sh` 报 `ModuleCache` 或 `sandbox-exec` 相关错误，可改用工作区内缓存目录：
+If the build fails because of user-directory cache or module-cache restrictions, use workspace-local caches:
 
 ```sh
 mkdir -p .build/tmp-home .build/module-cache
@@ -113,190 +51,89 @@ env HOME=$PWD/.build/tmp-home \
   CLANG_MODULE_CACHE_PATH=$PWD/.build/module-cache \
   DEVELOPER_DIR=/Users/loners/Downloads/Xcode-beta.app/Contents/Developer \
   bash scripts/build_app.sh
-open .build/SnapNook.app
 ```
 
-如果系统已正确切换 `xcode-select`，也可以直接运行：
+`scripts/build_app.sh` must keep SwiftPM resource bundles in `.app/Contents/Resources`, especially `KeyboardShortcuts_KeyboardShortcuts.bundle`.
 
-```sh
-bash scripts/build_app.sh
-open .build/SnapNook.app
-```
+## Development Rules
 
-`KeyboardShortcuts.Recorder` 依赖 SwiftPM 资源 bundle 中的本地化字符串。`scripts/build_app.sh` 打包 `.app` 时必须保留 `KeyboardShortcuts_KeyboardShortcuts.bundle`，否则点击 `Preferences` 创建 recorder 时会因 `Bundle.module` 找不到资源触发 `EXC_BREAKPOINT / SIGTRAP` 闪退。
+- Think before coding. State assumptions when a request is ambiguous.
+- Stop and ask when the requirement has multiple plausible meanings that would change the implementation.
+- Keep changes surgical and directly tied to the current request.
+- Do not refactor unrelated code.
+- Prefer fixing the existing implementation over rewriting it.
+- Do not add dependencies unless explicitly needed and justified.
+- Do not add extra UI, onboarding, notifications, background services, persistence, or future-feature scaffolding without explicit request.
+- Preserve existing AppKit activation and window lifecycle behavior.
+- If a change touches capture, OCR, preview, editor rendering, or export, build the app and manually verify the affected flow.
 
-## 测试重点
+## Product Boundaries
 
-每次修改后至少手动验证以下流程：
+Allowed to maintain and improve:
 
-1. App 启动后只显示菜单栏图标/标题，不显示 Dock 主窗口。
-2. 菜单包含 `Capture Area`、`Capture Text`、`Preferences`、`Quit`。
-3. `Preferences` 中可设置 `Capture Area` 和 `Capture Text` 全局快捷键；`Capture Area` 默认值为 `Option + Shift + S`，`Capture Text` 默认不占用快捷键。
-4. 无权限时，触发截图会弹出授权提示，并能打开系统设置。
-5. 有权限时，触发截图会进入半透明遮罩模式。
-6. 拖拽选区后会完成截图。
-7. `ESC` 能取消截图。
-8. 截图完成后会在目标屏幕 visibleFrame 左下角显示浮动预览，距离左边和底部约 24 px。
-9. 浮动预览窗口尺寸固定为 `300x180`，不能跟随截图原图尺寸变化。
-10. 浮动预览默认显示截图缩略图，不抢主窗口焦点，不显示 Dock 图标。
-11. 缩略图必须在固定预览区域内按比例完整显示，不能拉伸变形；超宽图、超高图、小图都要正确显示。
-12. 鼠标移入预览后显示 `Copy`、`Save`、`Close` 操作，并显示毛玻璃/模糊背景；鼠标移出后恢复普通缩略图状态。
-13. 点击 `Close` 后立即关闭当前浮动预览，不保存图片，不复制图片，不弹确认框。
-14. 点击 `Copy` 会复制当前截图原图到剪贴板，不能使用缩略图；复制成功后浮动预览关闭，且不会自动保存文件。
-15. 点击 `Save` 会弹出 macOS 原生 `NSSavePanel`，默认文件名为 `SnapNook-yyyyMMdd-HHmmss.png`，用户可修改文件名和目录；确认保存后才写入原始 PNG 数据，取消时预览保持显示。
-16. 默认 8 秒后自动关闭预览；鼠标悬停时暂停自动关闭。
-17. 多显示器下预览优先出现在截图区域所在屏幕，兜底为当前鼠标所在屏幕。
-18. 浮动预览左下角 `Edit` 可以打开编辑窗口，并显示截图原图。
-19. 编辑窗口选择 `Rectangle` 工具后，鼠标在图片区域内任意方向拖拽可创建矩形；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
-20. 编辑窗口选择 `Arrow` 工具后，鼠标在图片区域内拖拽可创建箭头；拖拽过程有实时预览，长度小于 `8 px` 时忽略。
-21. 编辑窗口缩放后，已有矩形和箭头标注必须继续和图片内容对齐，不能漂移。
-22. 画出新的 `Rectangle` 或 `Arrow` 后，编辑器会自动回到 `Select`；新标注应立即可被再次点击选中并进入二次编辑。
-23. `Select` 工具下，点击已有 `Rectangle` 或 `Arrow` 必须选中该标注；点击空白区域时取消当前选中。
-24. `Rectangle` 选中后必须显示高亮边框和 `8` 个控制点；点击矩形内部可以进入移动，点击控制点可以进入调整大小。
-25. `Arrow` 选中后必须显示起点/终点控制点；点击箭头线段可以进入移动，点击起点或终点可以进入方向/长度编辑。
-26. `Undo` / `Redo` 需要覆盖新增和更新标注操作；拖拽过程中不要逐帧入栈，只在 `mouseUp` 时记录一次操作。
-27. 编辑窗口 `Save as...` 导出的是“原图 + 当前 annotations”的合成 PNG，导出尺寸必须等于原始截图尺寸，且不能包含选中框、控制点或辅助虚线。
-28. 编辑窗口选择 `Text` 工具后，点击图片区域应创建默认文字框并立即进入编辑；空文本点击外部后取消，不生成 annotation；有内容时点击外部后保存。
-29. `TextAnnotation` 选中后必须可移动、可通过 `8` 个控制点调整大小；双击文字框应再次进入编辑；导出时只导出文字内容，不导出编辑态边框和控制点。
-30. 编辑窗口选择 `Highlight` 工具后，拖拽创建的区域应表现为聚光灯效果：区域内保持原图，区域外统一变暗；选中后必须支持移动和 `8` 个控制点缩放。
-31. `Select` 工具下选中任意 `Rectangle` / `Arrow` / `Text` / `Highlight` 后，按 `Backspace` 应删除该标注；若当前正在编辑文字，则 `Backspace` 只能删除文本内容，不能误删整个标注。
-32. 编辑窗口选择 `Blur` 工具后，拖拽创建的区域应只在框内显示模糊效果；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
-33. 编辑窗口选择 `Mosaic` 工具后，拖拽创建的区域应只在框内显示马赛克效果；拖拽过程有实时预览，宽或高小于 `5 px` 时忽略。
-34. `Select` 工具下点击已有 `Blur` / `Mosaic` 必须选中该标注；选中后支持移动、`8` 个控制点缩放和 `Backspace` 删除。
-35. 编辑窗口 `Save as...` 导出时，`Blur` / `Mosaic` 必须只作用于各自 rect 内，区域外保持原图，不导出选中框、控制点或辅助虚线。
-36. 点击 `Capture Text` 后，应进入独立的文字框选模式；选区样式与普通截图模式可区分，显示浅灰半透明矩形和右下角宽高数字。
-37. `Capture Text` 框选完成后，不显示浮动预览、不打开编辑器、不保存图片；而是直接对选区原图执行 OCR。
-38. `Capture Text` OCR 成功后，应自动将纯文本复制到剪贴板，并显示 `Text copied.` 提示。
-39. `Capture Text` 若未识别到文字，应显示 `No text recognized.`，且不能覆盖已有剪贴板内容。
-40. `Capture Text` 若 OCR 失败，应显示 `OCR failed.`；若正在识别，应显示 `Recognizing text...`。
-41. `Capture Text` 按 `ESC` 或拖拽宽高小于 `5 px` 时应取消，不截图、不 OCR、不复制。
-42. `Capture Text` 的宽高数字必须显示实际截图像素尺寸，不是 point；Retina 和多显示器下选区截图必须与普通 `Capture Area` 一致稳定。
+- `Capture Area`
+- `Capture Text`
+- Floating preview
+- Manual copy and save
+- Screenshot editor annotations
+- Existing editor crop behavior
+- OCR flow
+- Preferences and shortcuts
+- Build and packaging scripts
 
-## V1 已完成能力与历史边界
+Do not implement unless explicitly requested:
 
-V1 的目标是基础区域截图能力，目前已经完成。
-下面的约束属于历史边界说明，避免后续维护时误解 V1 的设计目标。
+- Screen recording
+- Scrolling screenshot
+- Cloud sync
+- Login or account system
+- Auto update
+- OCR history
+- OCR translation
+- Complex layer panel
 
-当前仍然不要实现以下功能：
-- 标注
-- 录屏
-- 滚动截图
-- 云同步
-- 登录
-- 自动更新
+## AppKit Rules
 
-除非有明确需求，不要提前为这些功能铺设抽象层。
+- Capture overlay windows must remain non-activating.
+- Do not call `NSApp.activate(ignoringOtherApps:)`, `makeMain()`, or similar activation APIs when starting screenshot or OCR selection.
+- Overlay windows may become key and set the content view as first responder, but SnapNook must not become the foreground active app.
+- Hide the overlay before capturing the selected region.
+- Do not synchronously close overlay windows and release controller-owned arrays from mouse event callbacks.
+- Use strong controller ownership for `NSPanel`, `NSWindow`, `NSHostingView`, and preview controllers.
+- Avoid `[unowned self]` in lifecycle code. Prefer `[weak self]` with safe unwrapping.
+- Guard all close, cleanup, completion, timer, delayed callback, and delegate paths against double execution.
 
-## V2 当前范围
+## Editor Rules
 
-当前已实现并允许继续维护的编辑能力仅包括：
-- 矩形标注
-- 箭头标注
-- 文字标注
-- 高亮标注
-- 模糊区域
-- 马赛克区域
-- `Select` 模式下的标注命中检测与选中
-- 矩形的二次编辑入口：移动、控制点缩放
-- 箭头的二次编辑入口：整体移动、起点/终点调整
-- 文字框的创建、再次编辑、移动、控制点缩放
-- 高亮框的移动、控制点缩放、聚光灯渲染
-- 模糊框的移动、控制点缩放、区域内模糊渲染
-- 马赛克框的移动、控制点缩放、区域内马赛克渲染
-- `CanvasTransform` 坐标转换
-- `Backspace` 删除选中标注
-- 命令式 `Undo` / `Redo` 数据结构仍可保留，但当前工具栏不显示对应按钮
-- 编辑后 `Save as...` 导出合成图
+- Store annotations in original image coordinates, not window or view coordinates.
+- Use `CanvasTransform` when converting between image and view coordinates.
+- Keep handle sizes and hit-test tolerances fixed in view pixels.
+- Render previews by overlaying annotations; do not mutate `originalImage`.
+- Export from the original screenshot size unless an active crop is applied.
+- Do not export selection boxes, handles, or helper lines.
+- `Blur` and `Mosaic` must affect only their own rect.
+- `Highlight` export must keep the selected region unchanged and darken the outside region.
+- Undo and redo should record completed operations, not every drag frame.
 
-当前不要实现以下编辑能力：
-- 裁剪
-- 复杂图层面板
+## OCR Rules
 
-## V3 当前范围
+`Capture Text` is not a normal screenshot flow.
 
-当前已实现并允许继续维护的 OCR 能力仅包括：
-- 菜单栏入口 `Capture Text`
-- 复用区域框选 overlay，并区分 `screenshot` / `textOCR` 选择模式
-- 文字框选完成后直接截取选区原图，不显示浮动预览
-- 使用 Vision `VNRecognizeTextRequest` 做本地 OCR
-- 识别语言当前限定为 `zh-Hans`、`en-US`
-- OCR 成功后自动复制纯文本到剪贴板
-- OCR 空结果不覆盖已有剪贴板内容
-- 可在 `Preferences` 中为 `Capture Text` 设置全局快捷键
-- 通过轻量 HUD 提示 `Recognizing text.` / `Text copied.` / `No text recognized.` / `OCR failed.`
+It must:
 
-当前不要实现以下 OCR 能力：
-- OCR 结果编辑面板
-- OCR 历史记录
-- OCR 自动翻译
-- OCR 结构化导出
+- Use a distinct OCR selection mode.
+- Hide the overlay before capturing the selected region.
+- OCR the original selected screenshot region.
+- Recognize `zh-Hans` and `en-US`.
+- Copy only non-empty recognized text to the clipboard.
+- Preserve existing clipboard contents when no text is recognized.
+- Show lightweight HUD messages for recognizing, copied, no text, and failure states.
 
-当前阶段的 OCR 实现约束：
-- `Capture Text` 不是普通截图，不得显示浮动预览、保存面板或编辑器。
-- OCR 必须基于选区原始截图，不得使用缩略图或预览图。
-- OCR 前必须先隐藏 overlay；必要时可延迟一小段时间截图，避免将选区框截入图片。
-- `CaptureOverlayController` 的 `textOCR` 模式应显示浅灰半透明填充、细边框和右下角像素尺寸。
-- 选区宽高小于 `5 px` 时直接取消，不进入 OCR。
-- 识别结果写剪贴板时，只有非空文本才允许 `clearContents()` 后写入；空结果不得覆盖原有内容。
+It must not:
 
-当前阶段的实现约束：
-- 标注数据必须保存为原始图片坐标，不要保存窗口坐标。
-- 鼠标事件和 hit testing 使用 view coordinate；判断命中前先通过 `CanvasTransform` 将标注转换到 view coordinate。
-- 控制点大小、命中容错范围使用固定 view 像素值，不跟随图片缩放。
-- 预览渲染必须通过坐标转换叠加在原图之上，不要直接修改 `originalImage`。
-- `TextAnnotation` 必须保存 `rect`，不要只保存 `origin`。
-- `HighlightAnnotation` 必须导出聚光灯效果，即区域外变暗、区域内保持原图。
-- `BlurAnnotation` / `MosaicAnnotation` 必须保存 `rect`，不要保存 view coordinate。
-- `Blur` / `Mosaic` 只允许在各自 rect 内生效，区域外保持原图。
-- 选中框、控制点、辅助虚线只允许在编辑器预览中显示，不能参与导出。
-- 导出时必须基于原始截图尺寸重绘标注，保证导出结果和编辑器预览一致。
-- `EditedImageExporter` 导出时，原始 `CGImage` 和 `Blur` / `Mosaic` 效果图必须先在未翻转的 bitmap `CGContext` 中绘制，避免保存结果上下反转。
-- 只有绘制 `AnnotationRenderer` 标注前才翻转导出 `CGContext`；`Blur` / `Mosaic` 导出裁剪 rect 需要从 image coordinate 转换到 CoreGraphics 的下左原点坐标。
-- 当前已知稳定策略是：新标注创建完成后自动切回 `Select`，降低“二次点击无效”风险。
-
-## 修改约束
-
-- 保持外科手术式修改，只改和当前需求直接相关的代码。
-- 沿用当前按功能拆文件的结构，不要把逻辑重新塞回单文件。
-- 优先先修复、先验证，再考虑扩展。
-- 如果引入新能力，先确认它属于当前 V2 范围，并与现有编辑器能力保持一致。
-- 不要擅自加入额外 UI、引导页、通知系统或后台服务。
-
-## 崩溃排查与窗口生命周期注意事项
-
-- macOS 崩溃优先查看完整 `.ips`：
-  - 常见位置：`~/Library/Logs/DiagnosticReports/`。
-  - 如果找不到，继续查：`~/Library/Logs/DiagnosticReports/Retired/`。
-  - 必须核对 `.ips` 中的 `slice_uuid` 和当前 `.build/SnapNook.app/Contents/MacOS/SnapNook` 的 `dwarfdump --uuid` 是否一致，避免分析旧版本崩溃。
-- 对 `objc_release` / `EXC_BAD_ACCESS` 崩溃，不要只看崩溃栈顶；需要结合 unified log 判断最后进入的业务阶段：
-  ```sh
-  /usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.ethan.snapnook" OR process == "SnapNook"'
-  ```
-- 当前已知风险点是 AppKit 窗口释放时机：
-  - `CaptureOverlayController` 的框选窗口必须保持非激活：使用 non-activating `NSPanel`，不要在开始截图或截取文字时调用 `NSApp.activate(ignoringOtherApps:)`、`makeMain()` 或其他会切走当前前台应用/窗口焦点的 API。
-  - 截图和 `Capture Text` 都必须支持在其他 App 的下拉菜单、弹出菜单等临时 UI 展开时触发；启动 overlay 不能导致这些 UI 因失焦而消失。
-  - overlay 可以成为 key window 并让 content view 成为 first responder，以接收拖拽和 `ESC`，但不能把 SnapNook 激活为前台应用。
-  - `CaptureOverlayController` 管理的 overlay window 不要在 mouse event 回调中同步 `close()` 并立即释放数组。
-  - 选区完成时应先 `orderOut(nil)` 隐藏遮罩，避免截图拍到遮罩。
-  - 截图/取消流程结束后再 cleanup；cleanup 中延后一轮主循环关闭窗口。
-  - overlay window 必须设置 `isReleasedWhenClosed = false`，由 controller 明确持有和释放。
-- 所有 close / cleanup / completion 路径必须有状态保护，避免重复关闭同一个 window：
-  - controller 级别保护 cleanup。
-  - window 级别保护 close。
-  - view 级别保护 completion。
-- 如果新增 `NSPanel`、`NSWindow`、`NSHostingView` 或 preview 类 controller：
-  - 不要只用局部变量创建 window/panel，必须由 controller 强引用。
-  - 避免 `[unowned self]`；优先使用 `[weak self]` 并安全解包。
-  - 检查 `DispatchQueue.main.asyncAfter`、`Timer`、SwiftUI `onDisappear` / `onHover`、`NSWindowDelegate` 回调是否访问已释放对象。
-  - `ESC` 取消、截图完成、关闭按钮、自动消失等路径不能重复触发 close/dismiss。
-- 调试窗口生命周期时，可以给关键 controller / window / view 临时加入 `deinit { print(...) }`，确认释放时机；问题确认后再决定是否保留。
-
-## 已知注意点
-
-- 单显示器稳定性优先，多显示器支持当前为尽量兼容。
-- 截图权限和系统版本行为可能因 macOS 版本变化而不同，改动前先确认实际 API 表现。
-- 当前构建依赖本机可用的 Xcode/Swift 工具链；如果 `swift build` 异常，先排查 `DEVELOPER_DIR` 或 `xcode-select`。
-- 浮动预览定位必须基于 `NSScreen.visibleFrame` 计算，不能写死屏幕坐标，也不能复用上一次显示位置。
-- 浮动预览窗口尺寸当前固定为 `300x180`；不要使用截图原图尺寸驱动 `NSPanel` / `NSWindow` 大小。
-- 预览图只允许作为缩略图展示；复制和保存必须继续使用原图与原始 PNG 数据。
-- 当前版本截图完成后只显示浮动预览，不自动保存到桌面或其他目录；是否保存仅由用户点击 `Save` 决定。
+- Show the floating preview.
+- Open the editor.
+- Open a save panel.
+- Save an image.
+- Copy an image.
+- Overwrite the clipboard with empty text.
