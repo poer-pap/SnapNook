@@ -42,6 +42,7 @@ open .build/SnapNook.app
 3. `ESC` 能取消截图。
 4. 拖拽宽高小于阈值时取消，不截图。
 5. overlay 不应激活 SnapNook，也不应导致其他 App 的菜单或弹窗因失焦消失。
+6. 复制或保存截图原图后，图片四边不应包含选区白框或向内扩散的白色光晕。
 
 ## Scrolling Capture
 

@@ -75,6 +75,7 @@ dwarfdump --uuid .build/SnapNook.app/Contents/MacOS/SnapNook
 - 启动 overlay 不能导致这些临时 UI 因失焦而消失。
 - overlay 可以成为 key window，并让 content view 成为 first responder，以接收拖拽和 `ESC`。
 - overlay 不能把 SnapNook 激活为前台应用。
+- overlay window 必须设置 `sharingType = .none`，避免选区边框被 WindowServer 合成进最终截图。
 - 不要在 mouse event 回调中同步 `close()` 并立即释放窗口数组。
 - 选区完成时应先 `orderOut(nil)` 隐藏遮罩，避免截图拍到遮罩。
 - 截图、OCR 或取消流程结束后再 cleanup。

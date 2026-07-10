@@ -88,6 +88,7 @@ private final class CaptureOverlayWindow: NSPanel {
         isOpaque = false
         level = .screenSaver
         ignoresMouseEvents = false
+        sharingType = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hasShadow = false
     }
