@@ -1,14 +1,7 @@
 import AppKit
-import OSLog
-
-private let scrollingLogger = Logger(subsystem: "com.ethan.snapnook", category: "ScrollingCapture")
 
 final class ScrollingCaptureController {
-    private enum Constants {
-        static let captureInterval: TimeInterval = 0.2
-    }
-
-    private let onFinish: (NSImage, CGRect, CGRect) -> Void
+    private let onFinish: (ScreenshotPreviewItem) -> Void
     private let onCancel: () -> Void
     private var state: ScrollingCaptureState = .idle
     private var screen: NSScreen?
@@ -16,201 +9,182 @@ final class ScrollingCaptureController {
     private var selectionView: ScrollingSelectionOverlayView?
     private var previewPanel: ScrollingPreviewPanel?
     private var controlPanel: ScrollingCaptureControlPanel?
-    private var keyMonitor: Any?
-    private var captureTimer: Timer?
-    private let stitcher = ScrollingStitcher()
-    private var isCapturingFrame = false
+    private var escapeShortcut: ScrollingEscapeShortcut?
+    private var pointerTimer: Timer?
+    private var pipeline: ScrollingCapturePipeline?
+    private var stream: ScrollingCaptureStream?
+    private var startTask: Task<Void, Never>?
+    private var lastResult: ScrollingStitcher.AppendResult = .unchanged
+    private var lastImage: NSImage?
+    private var pixelHeight = 0
     private var didCleanup = false
 
-    init(onFinish: @escaping (NSImage, CGRect, CGRect) -> Void, onCancel: @escaping () -> Void) {
+    init(onFinish: @escaping (ScreenshotPreviewItem) -> Void, onCancel: @escaping () -> Void) {
         self.onFinish = onFinish
         self.onCancel = onCancel
     }
 
-    deinit {
-        cleanup()
-    }
-
-    var isActive: Bool {
-        state != .idle && state != .cancelled
-    }
-
     func startSelection() {
-        guard state == .idle || state == .cancelled else {
-            scrollingLogger.notice("Ignoring duplicate scrolling capture request.")
-            return
-        }
-
-        didCleanup = false
-        stitcher.reset()
-        let targetScreen = NSScreen.screenContainingMouse ?? NSScreen.main
-        guard let targetScreen else { return }
-
-        screen = targetScreen
-        state = .selecting
-
-        let view = ScrollingSelectionOverlayView(screen: targetScreen) { [weak self] interaction in
-            self?.handle(interaction)
-        }
-        let window = ScrollingSelectionWindow(screen: targetScreen, contentView: view)
-        selectionView = view
-        selectionWindow = window
-        window.show()
-    }
-
-    private func handle(_ interaction: ScrollingSelectionOverlayView.Interaction) {
-        switch interaction {
-        case .startCapture:
-            startCapture()
-        case .done:
-            finishCapture()
-        case .cancel, .escape:
-            cancelCapture()
-        }
-    }
-
-    private func startCapture() {
-        guard state == .selecting,
-              let selectionView,
-              let selectionWindow,
-              let screen
-        else {
-            return
-        }
-
-        state = .capturing
-        let selectionRect = selectionView.selectedScreenRect
-        selectionView.setCapturing(true)
-        selectionWindow.ignoresMouseEvents = true
-
-        let previewPanel = ScrollingPreviewPanel(selectionRect: selectionRect, screen: screen)
-        previewPanel.orderFrontRegardless()
-        self.previewPanel = previewPanel
-
-        let controlPanel = ScrollingCaptureControlPanel(selectionRect: selectionRect, screen: screen)
-        controlPanel.onDone = { [weak self] in self?.finishCapture() }
-        controlPanel.onCancel = { [weak self] in self?.cancelCapture() }
-        controlPanel.orderFrontRegardless()
-        self.controlPanel = controlPanel
-
-        installEventMonitors()
-        startContinuousCapture()
-        captureFrame()
-    }
-
-    private func installEventMonitors() {
-        removeEventMonitors()
-
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
-                self?.cancelCapture()
-                return nil
-            }
-            return event
-        }
-    }
-
-    private func captureFrame() {
-        guard state == .capturing,
-              !isCapturingFrame,
-              let selectionView,
-              let selectionWindow,
-              let screen
-        else {
-            return
-        }
-
-        isCapturingFrame = true
-        let rect = selectionView.selectedScreenRect
-
-        defer {
-            isCapturingFrame = false
-        }
-
-        guard let image = ScreenCapturer.capture(
-            rect: rect,
-            screenFrame: screen.frame,
-            belowWindowID: CGWindowID(selectionWindow.windowNumber)
-        ) else {
-            scrollingLogger.error("Scrolling capture frame returned nil.")
-            return
-        }
-
-        let didUpdate = stitcher.append(ScrollingCaptureFrame(image: image, capturedAt: Date()))
-        if didUpdate {
-            previewPanel?.update(image: stitcher.previewImage, pixelHeight: stitcher.stitchedPixelHeight)
-        }
-    }
-
-    private func startContinuousCapture() {
-        captureTimer?.invalidate()
-        captureTimer = Timer.scheduledTimer(withTimeInterval: Constants.captureInterval, repeats: true) { [weak self] _ in
-            self?.captureFrame()
-        }
-    }
-
-    private func finishCapture() {
-        guard state == .capturing else { return }
-        state = .finishing
-        captureTimer?.invalidate()
-        captureTimer = nil
-        removeEventMonitors()
-
-        guard let selectionView,
-              let screen,
-              let finalImage = stitcher.finalImage()
-        else {
-            cleanup()
+        guard state == .idle else { return }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else {
             onCancel()
             return
         }
+        self.screen = screen
+        state = .selecting
+        let view = ScrollingSelectionOverlayView(screen: screen) { [weak self] interaction in
+            switch interaction {
+            case .startCapture: self?.startCapture()
+            case .done: self?.finishCapture()
+            case .cancel, .escape: self?.cancelCapture()
+            }
+        }
+        let window = ScrollingSelectionWindow(screen: screen, contentView: view)
+        selectionView = view
+        selectionWindow = window
+        escapeShortcut = ScrollingEscapeShortcut { [weak self] in self?.cancelCapture() }
+        window.show()
+    }
 
+    private func startCapture() {
+        guard state == .selecting, let selectionView, let selectionWindow, let screen,
+              let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return }
+        state = .capturing
         let rect = selectionView.selectedScreenRect
-        cleanup()
-        onFinish(finalImage, rect, screen.frame)
+        selectionView.setCapturing(true)
+        selectionWindow.ignoresMouseEvents = true
+        let preview = ScrollingPreviewPanel(selectionRect: rect, screen: screen)
+        previewPanel = preview
+        preview.orderFrontRegardless()
+        let controls = ScrollingCaptureControlPanel(selectionRect: rect, screen: screen)
+        controls.onDone = { [weak self] in self?.finishCapture() }
+        controls.onCancel = { [weak self] in self?.cancelCapture() }
+        controlPanel = controls
+        controls.orderFrontRegardless()
+
+        let pipeline = ScrollingCapturePipeline()
+        self.pipeline = pipeline
+        pipeline.onUpdate = { [weak self] result, image, height in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.state == .capturing else { return }
+                if self.lastResult != .failed { self.lastResult = result }
+                if let image { self.lastImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)) }
+                self.pixelHeight = height
+                self.updateStatus()
+                if result == .limitReached || result == .failed { self.stopStream() }
+            }
+        }
+        let stream = ScrollingCaptureStream(pipeline: pipeline, rect: rect)
+        self.stream = stream
+        stream.onFailure = { [weak self] error in
+            DispatchQueue.main.async { [weak self] in self?.captureFailed(error) }
+        }
+        pointerTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.updateStatus() }
+        startTask = Task { [weak self] in
+            do {
+                try await stream.start(rect: rect, screenFrame: screen.frame, displayID: displayID.uint32Value, scale: screen.backingScaleFactor)
+                guard let self, self.state == .capturing else { await stream.stop(); return }
+                self.startTask = nil
+            } catch {
+                guard let self, self.state == .capturing else { await stream.stop(); return }
+                self.startTask = nil
+                self.captureFailed(error)
+            }
+        }
+    }
+
+    private func updateStatus() {
+        guard state == .capturing, let selectionView else { return }
+        let status: String
+        switch lastResult {
+        case .limitReached: status = "64MP limit · Done or Cancel"
+        case .failed: status = "Capture failed · Done or Cancel"
+        default:
+            if !selectionView.selectedScreenRect.contains(NSEvent.mouseLocation) {
+                status = "Paused · Move into selection"
+            } else if lastResult == .waitingForOverlap {
+                status = "Scroll back to restore overlap"
+            } else {
+                status = "Capturing..."
+            }
+        }
+        previewPanel?.update(image: lastImage, pixelHeight: pixelHeight, status: status)
+    }
+
+    private func finishCapture() {
+        guard state == .capturing, let pipeline, let selectionView, let screen else { return }
+        state = .finishing
+        pointerTimer?.invalidate()
+        previewPanel?.update(image: lastImage, pixelHeight: pixelHeight, status: "Finishing...")
+        let rect = selectionView.selectedScreenRect
+        let screenFrame = screen.frame
+        let scale = screen.backingScaleFactor
+        pipeline.finish { [weak self] image, data in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.state == .finishing else { return }
+                guard let image, let data else {
+                    self.cancelCapture()
+                    AlertPresenter.show(message: "Scrolling Capture failed.", informativeText: "No confirmed image could be exported.")
+                    return
+                }
+                let item = ScreenshotPreviewItem(image: NSImage(cgImage: image, size: NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)), pngData: data, createdAt: Date(), captureRect: rect, screenFrame: screenFrame)
+                self.cleanup()
+                self.onFinish(item)
+            }
+        }
+        stopStream()
+    }
+
+    private func captureFailed(_ error: Error) {
+        guard state == .capturing else { return }
+        lastResult = .failed
+        pipeline?.stopReceiving()
+        stopStream()
+        updateStatus()
+        // Keep confirmed content available for Done after a stream failure.
     }
 
     private func cancelCapture() {
         guard state != .idle && state != .cancelled else { return }
         state = .cancelled
+        pipeline?.cancel()
         cleanup()
         onCancel()
+    }
+
+    private func stopStream() {
+        if let stream {
+            Task { await stream.stop() }
+            self.stream = nil
+        }
     }
 
     private func cleanup() {
         guard !didCleanup else { return }
         didCleanup = true
-        captureTimer?.invalidate()
-        captureTimer = nil
-        removeEventMonitors()
-
-        selectionWindow?.closeIfNeeded()
-        previewPanel?.closeIfNeeded()
-        controlPanel?.closeIfNeeded()
-        selectionWindow = nil
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+        escapeShortcut = nil
+        startTask?.cancel()
+        startTask = nil
+        stopStream()
+        let selectionWindow = selectionWindow
+        let previewPanel = previewPanel
+        let controlPanel = controlPanel
+        selectionWindow?.orderOut(nil)
+        previewPanel?.orderOut(nil)
+        controlPanel?.orderOut(nil)
+        self.selectionWindow = nil
         selectionView = nil
-        previewPanel = nil
-        controlPanel = nil
+        self.previewPanel = nil
+        self.controlPanel = nil
         screen = nil
-        isCapturingFrame = false
-        stitcher.reset()
-
-        if state != .cancelled {
-            state = .idle
+        pipeline = nil
+        DispatchQueue.main.async {
+            selectionWindow?.closeIfNeeded()
+            previewPanel?.closeIfNeeded()
+            controlPanel?.closeIfNeeded()
         }
-    }
-
-    private func removeEventMonitors() {
-        if let keyMonitor {
-            NSEvent.removeMonitor(keyMonitor)
-            self.keyMonitor = nil
-        }
-    }
-}
-
-private extension NSScreen {
-    static var screenContainingMouse: NSScreen? {
-        let location = NSEvent.mouseLocation
-        return screens.first { NSMouseInRect(location, $0.frame, false) }
+        if state != .cancelled { state = .idle }
     }
 }

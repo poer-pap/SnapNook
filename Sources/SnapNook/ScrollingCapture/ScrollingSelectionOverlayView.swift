@@ -16,6 +16,7 @@ final class ScrollingSelectionOverlayView: NSView {
 
     private enum DragState {
         case idle
+        case selecting(start: NSPoint)
         case moving(start: NSPoint, original: NSRect)
         case resize(handle: ResizeHandle, original: NSRect, start: NSPoint)
     }
@@ -45,6 +46,7 @@ final class ScrollingSelectionOverlayView: NSView {
     private let screen: NSScreen
     private let allowedRect: NSRect
     private let onInteraction: (Interaction) -> Void
+    private var hasSelection = false
     private var selectionRect: NSRect
     private var dragState: DragState = .idle
     private var isCapturing = false
@@ -61,16 +63,7 @@ final class ScrollingSelectionOverlayView: NSView {
             height: screen.visibleFrame.height
         ).intersection(screenBounds)
 
-        let defaultSize = NSSize(
-            width: max(Style.minSize.width, allowedRect.width * 0.6),
-            height: max(Style.minSize.height, allowedRect.height * 0.5)
-        )
-        self.selectionRect = NSRect(
-            x: allowedRect.midX - defaultSize.width / 2,
-            y: allowedRect.midY - defaultSize.height / 2,
-            width: defaultSize.width,
-            height: defaultSize.height
-        ).integral
+        self.selectionRect = .zero
 
         super.init(frame: screenBounds)
         wantsLayer = true
@@ -103,9 +96,12 @@ final class ScrollingSelectionOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         drawDimmedBackground()
-        drawSelection()
+        if hasSelection { drawSelection() }
 
-        if !isCapturing {
+        if !hasSelection {
+            let text = "Drag to select scrolling content (exclude fixed headers and scrollbars)" as NSString
+            text.draw(at: NSPoint(x: allowedRect.midX - 230, y: allowedRect.midY), withAttributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white])
+        } else if !isCapturing, case .idle = dragState {
             drawStartButton()
         }
     }
@@ -117,8 +113,16 @@ final class ScrollingSelectionOverlayView: NSView {
             return
         }
 
-        if startButtonRect.contains(point) {
+        if hasSelection, startButtonRect.contains(point) {
             onInteraction(.startCapture)
+            return
+        }
+
+        if !hasSelection {
+            dragState = .selecting(start: point)
+            hasSelection = true
+            selectionRect = NSRect(origin: point, size: .zero)
+            startButtonRect = .zero
             return
         }
 
@@ -139,6 +143,9 @@ final class ScrollingSelectionOverlayView: NSView {
         switch dragState {
         case .idle:
             return
+        case .selecting(let start):
+            let end = NSPoint(x: min(max(point.x, allowedRect.minX), allowedRect.maxX), y: min(max(point.y, allowedRect.minY), allowedRect.maxY))
+            selectionRect = NSRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
         case .moving(let start, let original):
             var next = original
             next.origin = NSPoint(
@@ -154,6 +161,15 @@ final class ScrollingSelectionOverlayView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if case .selecting = dragState {
+            if selectionRect.width < Style.minSize.width || selectionRect.height < Style.minSize.height {
+                hasSelection = false
+                selectionRect = .zero
+            } else {
+                selectionRect = clamp(selectionRect)
+            }
+        }
+        needsDisplay = true
         dragState = .idle
     }
 

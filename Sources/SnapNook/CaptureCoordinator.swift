@@ -41,8 +41,8 @@ final class CaptureCoordinator {
 
         activeFlow = .scrollingCapture
         let controller = ScrollingCaptureController(
-            onFinish: { [weak self] image, rect, screenFrame in
-                self?.handleScrollingCaptureFinished(image: image, rect: rect, screenFrame: screenFrame)
+            onFinish: { [weak self] item in
+                self?.handleScrollingCaptureFinished(item: item)
             },
             onCancel: { [weak self] in
                 captureLogger.notice("Scrolling capture cancelled.")
@@ -175,22 +175,9 @@ final class CaptureCoordinator {
         }
     }
 
-    private func handleScrollingCaptureFinished(image: NSImage, rect: CGRect, screenFrame: CGRect) {
-        do {
-            let item = ScreenshotPreviewItem(
-                image: image,
-                pngData: try ScreenshotWriter.pngData(from: image),
-                createdAt: Date(),
-                captureRect: rect,
-                screenFrame: screenFrame
-            )
-            previewController.show(item: item)
-            captureLogger.notice("Scrolling capture preview shown.")
-        } catch {
-            captureLogger.error("Scrolling capture PNG encoding failed: \(error.localizedDescription, privacy: .public).")
-            AlertPresenter.show(message: "Scrolling Capture failed.", informativeText: error.localizedDescription)
-        }
-
+    private func handleScrollingCaptureFinished(item: ScreenshotPreviewItem) {
+        previewController.show(item: item)
+        captureLogger.notice("Scrolling capture preview shown.")
         scrollingCaptureController = nil
         activeFlow = nil
     }

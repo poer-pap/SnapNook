@@ -34,8 +34,8 @@ final class ScrollingPreviewPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func update(image: NSImage?, pixelHeight: Int) {
-        previewView.update(image: image, pixelHeight: pixelHeight)
+    func update(image: NSImage?, pixelHeight: Int, status: String) {
+        previewView.update(image: image, pixelHeight: pixelHeight, status: status)
     }
 
     func closeIfNeeded() {
@@ -58,9 +58,11 @@ final class ScrollingPreviewPanel: NSPanel {
 private final class ScrollingPreviewView: NSView {
     private var image: NSImage?
     private var pixelHeight = 0
+    private var status = "Capturing..."
 
-    func update(image: NSImage?, pixelHeight: Int) {
-        self.image = image
+    func update(image: NSImage?, pixelHeight: Int, status: String) {
+        if let image { self.image = image }
+        self.status = status
         self.pixelHeight = pixelHeight
         needsDisplay = true
     }
@@ -75,7 +77,7 @@ private final class ScrollingPreviewView: NSView {
     }
 
     private func drawHeader() {
-        let title = "Capturing..." as NSString
+        let title = status as NSString
         let subtitle = pixelHeight > 0 ? "Height: \(pixelHeight) px" as NSString : "Scroll to capture more" as NSString
         title.draw(at: NSPoint(x: 12, y: bounds.maxY - 28), withAttributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .semibold),

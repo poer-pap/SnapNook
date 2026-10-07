@@ -1,294 +1,203 @@
 import AppKit
-import CoreGraphics
 
+/// Confined to the capture processing queue. Rows and offsets use top-left image coordinates.
 final class ScrollingStitcher {
-    private enum Constants {
-        static let minOverlapRatio: CGFloat = 0.15
-        static let maxOverlapRatio: CGFloat = 0.985
-        static let duplicateOverlapRatio: CGFloat = 0.995
-        static let duplicateFrameScore: Double = 3
-        static let goodMatchScore: Double = 30
-        static let weakMatchScore: Double = 55
+    enum AppendResult: Equatable {
+        case appended, unchanged, waitingForOverlap, limitReached, failed
     }
 
-    private struct OverlapMatch {
-        let height: Int
-        let score: Double
+    private let pixelLimit: Int
+    private var strips: [CGImage] = []
+    private var previous: Viewport?
+    private var anchor: Viewport?
+    private var position = 0
+    private var endPosition = 0
+    private(set) var stitchedPixelHeight = 0
+    private var reachedLimit = false
 
-        var isReliable: Bool {
-            score <= Constants.goodMatchScore
-        }
-
-        var isUsable: Bool {
-            score <= Constants.weakMatchScore
-        }
-    }
-
-    private(set) var acceptedCaptureCount = 0
-    private var stitchedImage: CGImage?
-    private var previousFrame: CGImage?
-    private var scale: CGFloat = 1
-
-    var stitchedPixelHeight: Int {
-        stitchedImage?.height ?? 0
-    }
-
-    var previewImage: NSImage? {
-        guard let stitchedImage else { return nil }
-        return NSImage(cgImage: stitchedImage, size: NSSize(width: CGFloat(stitchedImage.width) / scale, height: CGFloat(stitchedImage.height) / scale))
+    init(pixelLimit: Int = 64_000_000) {
+        self.pixelLimit = pixelLimit
     }
 
     func reset() {
-        acceptedCaptureCount = 0
-        stitchedImage = nil
-        previousFrame = nil
-        scale = 1
+        strips.removeAll()
+        previous = nil
+        anchor = nil
+        position = 0
+        endPosition = 0
+        stitchedPixelHeight = 0
+        reachedLimit = false
     }
 
     @discardableResult
-    func append(_ frame: ScrollingCaptureFrame) -> Bool {
-        guard let source = frame.image.normalizedCGImage() else { return false }
-        let current = normalizedFrame(source)
-        print("[ScrollCapture] frame size:", current.width, current.height)
-
-        if acceptedCaptureCount == 0 {
-            scale = max(1, CGFloat(current.width) / max(1, frame.image.size.width))
-            stitchedImage = current
-            previousFrame = current
-            acceptedCaptureCount = 1
-            print("[Stitcher] captures:", acceptedCaptureCount)
-            print("[Stitcher] stitched size:", current.width, current.height)
-            return true
-        }
-
-        guard let stitchedImage else { return false }
-        let match = bestVerticalOverlap(previous: stitchedImage, current: current)
-        print("[Stitcher] best overlap:", match.height, "score:", match.score)
-
-        if isDuplicate(current: current, match: match) {
-            print("[Stitcher] duplicate ignored")
-            return false
-        }
-
-        guard match.isUsable else {
-            print("[Stitcher] warning: unusable overlap match; capture ignored")
-            return false
-        }
-
-        if !match.isReliable {
-            print("[Stitcher] warning: weak overlap match; using best overlap")
-        }
-
-        let overlap = match.height
-        let duplicateThreshold = Int(CGFloat(current.height) * Constants.duplicateOverlapRatio)
-        if overlap >= duplicateThreshold {
-            print("[Stitcher] duplicate ignored")
-            return false
-        }
-
-        let appendY = max(0, min(current.height - 1, overlap))
-        guard let newPart = current.cropping(to: CGRect(x: 0, y: appendY, width: current.width, height: current.height - appendY)) else {
-            return false
-        }
-
-        self.stitchedImage = compose(top: stitchedImage, bottom: newPart)
-        self.previousFrame = current
-        acceptedCaptureCount += 1
-        print("[Stitcher] appended height:", newPart.height)
-        print("[Stitcher] captures:", acceptedCaptureCount)
-        if let stitchedImage = self.stitchedImage {
-            print("[Stitcher] stitched size:", stitchedImage.width, stitchedImage.height)
-        }
-        return true
-    }
-
-    func finalImage() -> NSImage? {
-        previewImage
-    }
-
-    private func bestVerticalOverlap(previous: CGImage, current: CGImage) -> OverlapMatch {
-        guard previous.width == current.width,
-              let previousBitmap = Bitmap(cgImage: previous),
-              let currentBitmap = Bitmap(cgImage: current)
-        else {
-            return OverlapMatch(height: 0, score: Double.greatestFiniteMagnitude)
-        }
-
-        let height = current.height
-        let minOverlap = max(1, Int(CGFloat(height) * Constants.minOverlapRatio))
-        let maxOverlap = min(height - 1, max(minOverlap, Int(CGFloat(height) * Constants.maxOverlapRatio)))
-        let step = 2
-        var bestOverlap = minOverlap
-        var bestScore = Double.greatestFiniteMagnitude
-
-        for overlap in stride(from: minOverlap, through: maxOverlap, by: step) {
-            let score = differenceScore(
-                previous: previousBitmap,
-                previousStartY: previous.height - overlap,
-                current: currentBitmap,
-                currentStartY: 0,
-                height: overlap,
-                sampleStep: step
-            )
-
-            if score < bestScore {
-                bestScore = score
-                bestOverlap = overlap
+    func append(_ image: CGImage) -> AppendResult {
+        guard !reachedLimit else { return .limitReached }
+        guard let current = Viewport(image) else { return .failed }
+        guard let previous, let anchor else {
+            guard image.width * image.height <= pixelLimit else {
+                reachedLimit = true
+                return .limitReached
             }
+            // Materialize a separate backing store instead of retaining an entire capture IOSurface.
+            guard let first = copiedStrip(image, from: 0) else { return .failed }
+            strips = [first]
+            self.previous = current
+            self.anchor = current
+            stitchedPixelHeight = image.height
+            return .appended
+        }
+        guard current.image.width == previous.image.width,
+              current.image.height == previous.image.height else { return .failed }
+        guard let delta = displacement(from: previous, to: current) else { return .waitingForOverlap }
+        let nextPosition = position + delta
+        if nextPosition <= endPosition {
+            self.previous = current
+            position = nextPosition
+            return .unchanged
         }
 
-        return OverlapMatch(height: bestOverlap, score: bestScore)
+        // Verify directly against the last appended viewport; do not accumulate tracking drift.
+        let extensionHeight = nextPosition - endPosition
+        guard extensionHeight <= image.height * 3 / 4,
+              displacement(from: anchor, to: current) == extensionHeight else { return .waitingForOverlap }
+        guard image.width * (stitchedPixelHeight + extensionHeight) <= pixelLimit else {
+            reachedLimit = true
+            return .limitReached
+        }
+        guard let strip = copiedStrip(image, from: image.height - extensionHeight) else { return .failed }
+        strips.append(strip)
+        stitchedPixelHeight += extensionHeight
+        position = nextPosition
+        endPosition = nextPosition
+        self.previous = current
+        self.anchor = current
+        return .appended
     }
 
-    private func isDuplicate(current: CGImage, match: OverlapMatch) -> Bool {
-        let duplicateOverlap = Int(CGFloat(current.height) * Constants.duplicateOverlapRatio)
-        if match.height >= duplicateOverlap && match.score <= Constants.goodMatchScore {
-            return true
-        }
-
-        guard let previousFrame,
-              previousFrame.width == current.width,
-              previousFrame.height == current.height,
-              let previousBitmap = Bitmap(cgImage: previousFrame),
-              let currentBitmap = Bitmap(cgImage: current)
-        else {
-            return false
-        }
-
-        let score = differenceScore(
-            previous: previousBitmap,
-            previousStartY: 0,
-            current: currentBitmap,
-            currentStartY: 0,
-            height: current.height,
-            sampleStep: max(4, current.height / 100)
-        )
-        return score <= Constants.duplicateFrameScore
+    func finalImage() -> CGImage? {
+        render(maxSize: nil)
     }
 
-    private func differenceScore(
-        previous: Bitmap,
-        previousStartY: Int,
-        current: Bitmap,
-        currentStartY: Int,
-        height: Int,
-        sampleStep: Int
-    ) -> Double {
-        var total: Double = 0
-        var count = 0
-        let xStep = max(4, previous.width / 80)
-
-        for yOffset in stride(from: 0, to: height, by: sampleStep) {
-            let previousY = previousStartY + yOffset
-            let currentY = currentStartY + yOffset
-            guard previousY >= 0, previousY < previous.height, currentY >= 0, currentY < current.height else {
-                continue
-            }
-
-            for x in stride(from: 0, to: previous.width, by: xStep) {
-                total += abs(Double(previous.luma(x: x, y: previousY)) - Double(current.luma(x: x, y: currentY)))
-                count += 1
-            }
-        }
-
-        return count == 0 ? Double.greatestFiniteMagnitude : total / Double(count)
+    func previewImage() -> CGImage? {
+        render(maxSize: CGSize(width: 196, height: 380))
     }
 
-    private func compose(top: CGImage, bottom: CGImage) -> CGImage? {
-        let width = top.width
-        let height = top.height + bottom.height
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
+    private func render(maxSize: CGSize?) -> CGImage? {
+        guard let first = strips.first else { return nil }
+        let scale = maxSize.map { min(1, min($0.width / CGFloat(first.width), $0.height / CGFloat(stitchedPixelHeight))) } ?? 1
+        let width = max(1, Int((CGFloat(first.width) * scale).rounded()))
+        let height = max(1, Int((CGFloat(stitchedPixelHeight) * scale).rounded()))
+        guard let context = Self.context(width: width, height: height) else { return nil }
+        context.interpolationQuality = maxSize == nil ? .none : .medium
+        var top = 0
+        for strip in strips {
+            context.draw(strip, in: CGRect(x: 0, y: CGFloat(stitchedPixelHeight - top - strip.height) * CGFloat(height) / CGFloat(stitchedPixelHeight), width: CGFloat(width), height: CGFloat(strip.height) * CGFloat(height) / CGFloat(stitchedPixelHeight)))
+            top += strip.height
         }
-
-        context.interpolationQuality = .none
-        context.draw(top, in: CGRect(x: 0, y: bottom.height, width: top.width, height: top.height))
-        context.draw(bottom, in: CGRect(x: 0, y: 0, width: bottom.width, height: bottom.height))
         return context.makeImage()
     }
 
-    private func normalizedFrame(_ image: CGImage) -> CGImage {
-        guard let stitchedImage, image.width != stitchedImage.width else {
-            return image
-        }
+    private func copiedStrip(_ image: CGImage, from row: Int) -> CGImage? {
+        guard let crop = image.cropping(to: CGRect(x: 0, y: row, width: image.width, height: image.height - row)),
+              let context = Self.context(width: crop.width, height: crop.height) else { return nil }
+        context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+        return context.makeImage()
+    }
 
-        let newHeight = max(1, Int(round(CGFloat(image.height) * CGFloat(stitchedImage.width) / CGFloat(image.width))))
-        guard let context = CGContext(
-            data: nil,
-            width: stitchedImage.width,
-            height: newHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return image
-        }
+    private static func context(width: Int, height: Int) -> CGContext? {
+        CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    }
 
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: stitchedImage.width, height: newHeight))
-        print("[Stitcher] warning: resized frame width from", image.width, "to", stitchedImage.width)
-        return context.makeImage() ?? image
+    private func displacement(from previous: Viewport, to current: Viewport) -> Int? {
+        let height = previous.full.height
+        // Static frames, including blank pages, do not need a unique displacement.
+        if score(previous.full, current.full, shift: 0) <= 0.8 { return 0 }
+        let coarseLimit = previous.small.height * 3 / 4
+        let coarseScores = (-coarseLimit...coarseLimit).map {
+            (shift: $0, score: score(previous.small, current.small, shift: $0))
+        }
+        let candidates = coarseScores.filter { candidate in
+            let index = candidate.shift + coarseLimit
+            return (index == 0 || candidate.score <= coarseScores[index - 1].score)
+                && (index == coarseScores.count - 1 || candidate.score <= coarseScores[index + 1].score)
+        }.sorted { $0.score < $1.score }.prefix(8)
+        let factor = Double(height) / Double(previous.small.height)
+        let radius = Int(ceil(factor)) + 1
+        var shifts = Set<Int>()
+        for candidate in candidates {
+            let center = Int((Double(candidate.shift) * factor).rounded())
+            for shift in (center - radius)...(center + radius) where abs(shift) <= height * 3 / 4 {
+                shifts.insert(shift)
+            }
+        }
+        let ranked = shifts.map { (shift: $0, score: score(previous.full, current.full, shift: $0, dense: true)) }
+            .sorted { $0.score < $1.score }
+        guard let best = ranked.first, best.score <= 5 else { return nil }
+        // Repeated textures and weakly distinguished offsets must not create new content.
+        if let alternative = ranked.first(where: { abs($0.shift - best.shift) > 2 }),
+           alternative.score <= best.score + 1.5 { return nil }
+        return best.shift
+    }
+
+    private func score(_ a: GrayBitmap, _ b: GrayBitmap, shift: Int, dense: Bool = false) -> Double {
+        let overlap = a.height - abs(shift)
+        guard overlap > 0 else { return .infinity }
+        let aStart = max(0, shift)
+        let bStart = max(0, -shift)
+        let yStep = dense ? 1 : max(1, overlap / 100)
+        let xStep = max(1, a.width / 64)
+        return a.bytes.withUnsafeBufferPointer { aBytes in
+            b.bytes.withUnsafeBufferPointer { bBytes in
+                var difference = 0
+                var samples = 0
+                let aBase = aBytes.baseAddress!
+                let bBase = bBytes.baseAddress!
+                for row in stride(from: 0, to: overlap, by: yStep) {
+                    let aRow = aBase + (aStart + row) * a.width
+                    let bRow = bBase + (bStart + row) * b.width
+                    for x in stride(from: 0, to: a.width, by: xStep) {
+                        difference += abs(Int(aRow[x]) - Int(bRow[x]))
+                        samples += 1
+                    }
+                }
+                return Double(difference) / Double(samples)
+            }
+        }
     }
 }
 
-private struct Bitmap {
+private struct Viewport {
+    let image: CGImage
+    let full: GrayBitmap
+    let small: GrayBitmap
+
+    init?(_ image: CGImage) {
+        guard let full = GrayBitmap(image, width: image.width, height: image.height),
+              let small = GrayBitmap(image, width: min(64, image.width), height: min(240, image.height)) else { return nil }
+        self.image = image
+        self.full = full
+        self.small = small
+    }
+}
+
+private struct GrayBitmap {
     let width: Int
     let height: Int
-    private let bytes: [UInt8]
-    private let bytesPerRow: Int
+    let bytes: [UInt8]
 
-    init?(cgImage: CGImage) {
-        width = cgImage.width
-        height = cgImage.height
-        bytesPerRow = width * 4
-        var data = [UInt8](repeating: 0, count: bytesPerRow * height)
-        guard let context = CGContext(
-            data: &data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
+    init?(_ image: CGImage, width: Int, height: Int) {
+        self.width = width
+        self.height = height
+        var bytes = [UInt8](repeating: 0, count: width * height)
+        let succeeded = bytes.withUnsafeMutableBytes { storage -> Bool in
+            guard let context = CGContext(data: storage.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0) else { return false }
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
         }
-
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        bytes = data
-    }
-
-    func luma(x: Int, y: Int) -> UInt8 {
-        let index = y * bytesPerRow + x * 4
-        guard index + 2 < bytes.count else { return 0 }
-        let r = Double(bytes[index])
-        let g = Double(bytes[index + 1])
-        let b = Double(bytes[index + 2])
-        return UInt8(max(0, min(255, 0.299 * r + 0.587 * g + 0.114 * b)))
-    }
-}
-
-private extension NSImage {
-    func normalizedCGImage() -> CGImage? {
-        var rect = NSRect(origin: .zero, size: size)
-        if let cgImage = cgImage(forProposedRect: &rect, context: nil, hints: nil) {
-            return cgImage
-        }
-
-        guard let tiffData = tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData)
-        else {
-            return nil
-        }
-        return bitmap.cgImage
+        guard succeeded else { return nil }
+        self.bytes = bytes
     }
 }

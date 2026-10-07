@@ -1,6 +1,7 @@
-import AppKit
+import CoreGraphics
+import CoreVideo
 
-struct ScrollingCaptureFrame {
-    let image: NSImage
-    let capturedAt: Date
+enum ScrollingCaptureFrame {
+    case image(CGImage)
+    case pixelBuffer(CVPixelBuffer)
 }
