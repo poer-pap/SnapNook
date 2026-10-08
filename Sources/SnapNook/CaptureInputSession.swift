@@ -7,9 +7,14 @@ final class CaptureInputSession {
     private var source: CFRunLoopSource?
     private let onEvent: (CGEventType, CGEvent) -> Void
     private let onFailure: () -> Void
+    private var initiallyPressedKeys: Set<CGKeyCode>
+    private var selectionPressedKeys: Set<CGKeyCode> = []
     private(set) var isStopped = false
 
-    init(onEvent: @escaping (CGEventType, CGEvent) -> Void, onFailure: @escaping () -> Void) {
+    init(initiallyPressedKeys: Set<CGKeyCode> = Set((0..<128).filter {
+        CGEventSource.keyState(.combinedSessionState, key: $0)
+    }), onEvent: @escaping (CGEventType, CGEvent) -> Void, onFailure: @escaping () -> Void) {
+        self.initiallyPressedKeys = initiallyPressedKeys
         self.onEvent = onEvent
         self.onFailure = onFailure
     }
@@ -47,6 +52,22 @@ final class CaptureInputSession {
             return false
         }
         onEvent(type, event)
+        let key = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        switch type {
+        case .keyDown:
+            if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+                selectionPressedKeys.insert(key)
+            }
+        case .keyUp:
+            // Carbon hotkeys can be absent from the system's pressed-key table.
+            // Only consume releases whose press was consumed by this selection.
+            initiallyPressedKeys.remove(key)
+            return selectionPressedKeys.remove(key) != nil
+        case .flagsChanged:
+            if initiallyPressedKeys.remove(key) != nil { return false }
+        default:
+            break
+        }
         return true
     }
 
