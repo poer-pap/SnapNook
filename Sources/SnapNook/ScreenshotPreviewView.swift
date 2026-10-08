@@ -28,14 +28,14 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         layer?.shadowOpacity = 0.3
         layer?.shadowRadius = 7
         layer?.shadowOffset = CGSize(width: 0, height: -2)
-        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 18, cornerHeight: 18, transform: nil)
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 16, cornerHeight: 16, transform: nil)
 
         let content = NSView(frame: bounds)
         content.wantsLayer = true
-        content.layer?.cornerRadius = 18
+        content.layer?.cornerRadius = 16
         content.layer?.masksToBounds = true
         content.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.18).cgColor
-        content.layer?.borderColor = NSColor.white.withAlphaComponent(0.35).cgColor
+        content.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
         content.layer?.borderWidth = 1
         addSubview(content)
 
@@ -52,6 +52,10 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         materialView.appearance = NSAppearance(named: .darkAqua)
         materialView.alphaValue = 0
         content.addSubview(materialView)
+        let hoverTint = NSView(frame: materialView.bounds)
+        hoverTint.wantsLayer = true
+        hoverTint.layer?.backgroundColor = NSColor(white: 0.17, alpha: 0.85).cgColor
+        materialView.addSubview(hoverTint)
 
         controlsView.frame = content.bounds
         controlsView.alphaValue = 0
@@ -191,7 +195,20 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         let copyButton = makeButton(title: "Copy", action: #selector(copyTapped))
         let saveButton = makeButton(title: "Save", action: #selector(saveTapped))
         let closeButton = makeIconButton(symbolName: "xmark", title: "Close", action: #selector(closeTapped))
-        let editButton = makeIconButton(symbolName: "pencil", title: "Edit", action: #selector(editTapped))
+        let editButton = makeIconButton(symbolName: "pencil.tip", title: "Edit", action: #selector(editTapped))
+        if let tip = editButton.image {
+            editButton.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                NSGraphicsContext.saveGraphicsState()
+                defer { NSGraphicsContext.restoreGraphicsState() }
+                let transform = NSAffineTransform()
+                transform.translateX(by: rect.midX, yBy: rect.midY)
+                transform.rotate(byDegrees: 135)
+                transform.concat()
+                tip.draw(in: NSRect(x: -tip.size.width / 2, y: -tip.size.height / 2, width: tip.size.width, height: tip.size.height))
+                return true
+            }
+            editButton.image?.isTemplate = true
+        }
         let stack = NSStackView(views: [copyButton, saveButton])
         stack.orientation = .vertical
         stack.spacing = 10
@@ -208,10 +225,10 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         ])
     }
 
-    private func makeButton(title: String, action: Selector, size: NSSize = NSSize(width: 54, height: 28)) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
+    private func makeButton(title: String, action: Selector, size: NSSize = NSSize(width: 52, height: 27)) -> NSButton {
+        let button = PreviewButton(title: title, target: self, action: action)
         button.isBordered = false
-        button.font = .systemFont(ofSize: 14, weight: .medium)
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
         button.contentTintColor = .black
         button.wantsLayer = true
         button.layer?.backgroundColor = NSColor(white: 0.82, alpha: 1).cgColor
@@ -223,8 +240,10 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
     }
 
     private func makeIconButton(symbolName: String, title: String, action: Selector) -> NSButton {
-        let button = makeButton(title: "", action: action, size: NSSize(width: 24, height: 24))
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)
+        let button = makeButton(title: "", action: action, size: NSSize(width: 22, height: 22))
+        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: symbolName == "xmark" ? 7 : 10, weight: .bold))
+        button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.toolTip = title
         button.setAccessibilityLabel(title)
@@ -235,4 +254,8 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
     @objc private func copyTapped() { if isEnabled { onCopy?() } }
     @objc private func saveTapped() { if isEnabled { onSave?() } }
     @objc private func closeTapped() { if isEnabled { onClose?() } }
+}
+
+private final class PreviewButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
 }
