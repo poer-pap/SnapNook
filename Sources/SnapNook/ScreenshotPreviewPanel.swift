@@ -1,7 +1,7 @@
 import AppKit
 
 final class ScreenshotPreviewPanel: NSPanel {
-    static let previewPanelSize = NSSize(width: 300, height: 180)
+    static let previewPanelSize = NSSize(width: 210, height: 150)
     private var didClose = false
 
     init(contentRect: NSRect) {
@@ -15,7 +15,7 @@ final class ScreenshotPreviewPanel: NSPanel {
         isReleasedWhenClosed = false
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = true
+        hasShadow = false
         level = .floating
         isMovable = false
         isMovableByWindowBackground = false

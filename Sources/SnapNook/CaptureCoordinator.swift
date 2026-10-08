@@ -28,7 +28,7 @@ final class CaptureCoordinator {
     }
 
     func scrollingCapture() {
-        guard activeFlow == nil, overlayController == nil, ocrTask == nil, scrollingCaptureController == nil else {
+        guard activeFlow == nil, overlayController == nil, ocrTask == nil, scrollingCaptureController == nil, !previewController.isDragging else {
             captureLogger.notice("Ignoring duplicate scrolling capture request while busy.")
             return
         }
@@ -48,14 +48,16 @@ final class CaptureCoordinator {
                 captureLogger.notice("Scrolling capture cancelled.")
                 self?.scrollingCaptureController = nil
                 self?.activeFlow = nil
+                self?.previewController.restoreAfterCapture()
             }
         )
         scrollingCaptureController = controller
+        previewController.hideForCapture()
         controller.startSelection()
     }
 
     private func startCapture(flow: ActiveFlow, mode: CaptureSelectionMode) {
-        guard activeFlow == nil, overlayController == nil, ocrTask == nil else {
+        guard activeFlow == nil, overlayController == nil, ocrTask == nil, !previewController.isDragging else {
             captureLogger.notice("Ignoring duplicate capture request while busy.")
             return
         }
@@ -94,13 +96,16 @@ final class CaptureCoordinator {
 
             self.overlayController?.cleanup()
             self.overlayController = nil
+            self.previewController.restoreAfterCapture()
         }
+        previewController.hideForCapture()
         overlayController?.show()
     }
 
     private func handleCapture(screen: CaptureScreen, rect: CGRect, flow: ActiveFlow) {
         let capturedImage = ScreenCapturer.capture(screen: screen, rect: rect)
         overlayController?.cleanup()
+        previewController.restoreAfterCapture()
         guard let image = capturedImage else {
             if flow == .captureText {
                 toastController.show(message: "OCR failed.")
@@ -180,6 +185,7 @@ final class CaptureCoordinator {
     }
 
     private func handleScrollingCaptureFinished(item: ScreenshotPreviewItem) {
+        previewController.restoreAfterCapture()
         previewController.show(item: item)
         captureLogger.notice("Scrolling capture preview shown.")
         scrollingCaptureController = nil
