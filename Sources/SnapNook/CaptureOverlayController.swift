@@ -9,18 +9,23 @@ enum CaptureSelectionMode {
 }
 
 enum CaptureOverlayResult {
-    case captured(CGRect, CGRect)
+    case captured(CaptureScreen, CGRect)
     case cancelled
+    case failed
 }
 
 final class CaptureOverlayController {
+    private let screens: [CaptureScreen]
     private let mode: CaptureSelectionMode
     private let completion: (CaptureOverlayResult) -> Void
     private var windows: [CaptureOverlayWindow] = []
+    private var inputSession: CaptureInputSession?
+    private var selectionWindow: CaptureOverlayWindow?
     private var didFinish = false
     private var didCleanup = false
 
-    init(mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+    init(screens: [CaptureScreen], mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+        self.screens = screens
         self.mode = mode
         self.completion = completion
     }
@@ -32,15 +37,45 @@ final class CaptureOverlayController {
     func show() {
         overlayLogger.notice("Overlay show requested for \(NSScreen.screens.count) screen(s).")
 
-        windows = NSScreen.screens.map { screen in
+        windows = screens.map { screen in
             CaptureOverlayWindow(screen: screen, mode: mode) { [weak self] result in
                 self?.finish(result)
             }
         }
 
         overlayLogger.notice("Overlay windows created: \(self.windows.count).")
-        windows.forEach { $0.show() }
+        let session = CaptureInputSession { [weak self] type, event in
+            self?.handle(type: type, event: event)
+        } onFailure: { [weak self] in
+            self?.finish(.failed)
+        }
+        inputSession = session
+        guard session.start() else {
+            finish(.failed)
+            return
+        }
+        windows.forEach { $0.orderFrontRegardless() }
+        CaptureOverlayView.selectionCursor.set()
         overlayLogger.notice("Overlay windows shown.")
+    }
+
+    func handle(type: CGEventType, event: CGEvent) {
+        guard !didFinish else { return }
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        let point = CGPoint(x: event.location.x, y: primaryTop - event.location.y)
+        let target = selectionWindow ?? windows.first { $0.frame.contains(point) }
+        if type == .leftMouseDown { selectionWindow = target }
+        for window in windows {
+            guard let view = window.contentView as? CaptureOverlayView else { continue }
+            if window === target {
+                view.handle(type: type, point: CGPoint(x: point.x - window.frame.minX,
+                                                       y: point.y - window.frame.minY),
+                            shift: event.flags.contains(.maskShift),
+                            keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)))
+            } else if type == .mouseMoved {
+                view.pointerExited()
+            }
+        }
     }
 
     private func finish(_ result: CaptureOverlayResult) {
@@ -65,6 +100,11 @@ final class CaptureOverlayController {
         }
 
         didCleanup = true
+        didFinish = true
+        inputSession?.stop()
+        inputSession = nil
+        selectionWindow = nil
+        NSCursor.arrow.set()
         overlayLogger.notice("Overlay cleanup.")
         let windowsToClose = windows
         windows.removeAll()
@@ -78,29 +118,24 @@ final class CaptureOverlayController {
 private final class CaptureOverlayWindow: NSPanel {
     private var didClose = false
 
-    init(screen: NSScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+    init(screen: CaptureScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
         let overlayView = CaptureOverlayView(screen: screen, mode: mode, completion: completion)
-        super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        super.init(contentRect: screen.screenFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 
         contentView = overlayView
         isReleasedWhenClosed = false
         backgroundColor = .clear
         isOpaque = false
         level = .screenSaver
-        ignoresMouseEvents = false
+        ignoresMouseEvents = true
+        animationBehavior = .none
         sharingType = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hasShadow = false
     }
 
-    override var canBecomeKey: Bool { true }
-
-    func show() {
-        overlayLogger.notice("Overlay window show.")
-        orderFrontRegardless()
-        makeKey()
-        contentView?.window?.makeFirstResponder(contentView)
-    }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 
     func closeIfNeeded() {
         guard !didClose else {
@@ -117,28 +152,74 @@ private final class CaptureOverlayWindow: NSPanel {
     }
 }
 
-private final class CaptureOverlayView: NSView {
-    private enum Style {
-        static let screenshotBorderWidth: CGFloat = 2
-        static let textFillAlpha: CGFloat = 0.25
-        static let textBorderWidth: CGFloat = 1.5
-        static let textLabelPadding = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
-        static let textLabelOffset: CGFloat = 8
-        static let minimumSelectionSize: CGFloat = 5
+struct CaptureSelectionDrag {
+    var anchor: CGPoint
+    var rect: CGRect = .zero
+    private var lastPoint: CGPoint
+
+    init(start: CGPoint) {
+        anchor = start
+        lastPoint = start
+        rect = CGRect(origin: start, size: .zero)
     }
 
-    private let screen: NSScreen
-    private let mode: CaptureSelectionMode
+    mutating func update(to point: CGPoint, bounds: CGRect, square: Bool, moving: Bool) {
+        if moving {
+            let dx = min(max(point.x - lastPoint.x, bounds.minX - rect.minX), bounds.maxX - rect.maxX)
+            let dy = min(max(point.y - lastPoint.y, bounds.minY - rect.minY), bounds.maxY - rect.maxY)
+            rect = rect.offsetBy(dx: dx, dy: dy)
+            anchor.x += dx
+            anchor.y += dy
+        } else {
+            let end = CGPoint(x: min(max(point.x, bounds.minX), bounds.maxX),
+                              y: min(max(point.y, bounds.minY), bounds.maxY))
+            var dx = end.x - anchor.x
+            var dy = end.y - anchor.y
+            if square {
+                let side = min(abs(dx), abs(dy))
+                dx = dx < 0 ? -side : side
+                dy = dy < 0 ? -side : side
+            }
+            rect = CGRect(x: min(anchor.x, anchor.x + dx), y: min(anchor.y, anchor.y + dy),
+                          width: abs(dx), height: abs(dy))
+        }
+        lastPoint = point
+    }
+}
+
+final class CaptureOverlayView: NSView {
+    static let selectionCursor: NSCursor = {
+        let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+            let cross = NSBezierPath()
+            cross.move(to: CGPoint(x: 2, y: 12))
+            cross.line(to: CGPoint(x: 22, y: 12))
+            cross.move(to: CGPoint(x: 12, y: 2))
+            cross.line(to: CGPoint(x: 12, y: 22))
+            cross.appendOval(in: CGRect(x: 7, y: 7, width: 10, height: 10))
+            NSColor.black.setStroke()
+            cross.lineWidth = 3
+            cross.stroke()
+            NSColor.white.setStroke()
+            cross.lineWidth = 1
+            cross.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
+    }()
+
+    private let screen: CaptureScreen
     private let completion: (CaptureOverlayResult) -> Void
-    private var startPoint: NSPoint?
-    private var currentPoint: NSPoint?
+    private var drag: CaptureSelectionDrag?
+    private var pointer: CGPoint
+    private var spaceHeld = false
     private var didComplete = false
 
-    init(screen: NSScreen, mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
+    init(screen: CaptureScreen, mode _: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
         self.screen = screen
-        self.mode = mode
         self.completion = completion
-        super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
+        self.pointer = CGPoint(x: NSEvent.mouseLocation.x - screen.screenFrame.minX,
+                               y: NSEvent.mouseLocation.y - screen.screenFrame.minY)
+        super.init(frame: NSRect(origin: .zero, size: screen.screenFrame.size))
         wantsLayer = true
     }
 
@@ -146,178 +227,92 @@ private final class CaptureOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
-        print("CaptureOverlayView deinit")
+    func pointerExited() {
+        guard drag == nil else { return }
+        pointer = CGPoint(x: -1, y: -1)
+        needsDisplay = true
     }
 
-    override var acceptsFirstResponder: Bool { true }
-
-    override func viewDidMoveToWindow() {
-        overlayLogger.notice("Overlay view moved to window: \(self.window != nil).")
-        window?.makeFirstResponder(self)
+    func handle(type: CGEventType, point: CGPoint, shift: Bool = false, keyCode: Int = 0) {
+        guard !didComplete else { return }
+        switch type {
+        case .mouseMoved:
+            Self.selectionCursor.set()
+            pointer = point
+        case .leftMouseDown:
+            pointer = point
+            drag = CaptureSelectionDrag(start: point)
+        case .leftMouseDragged, .leftMouseUp:
+            pointer = point
+            drag?.update(to: point, bounds: bounds, square: shift, moving: spaceHeld)
+            if type == .leftMouseUp, let selection = drag?.rect {
+                complete(selection.width >= 5 && selection.height >= 5
+                         ? .captured(screen, screenRect(selection)) : .cancelled)
+            }
+        case .flagsChanged:
+            drag?.update(to: pointer, bounds: bounds, square: shift, moving: spaceHeld)
+        case .keyDown:
+            if keyCode == 53 { complete(.cancelled) }
+            if keyCode == 49 { spaceHeld = true }
+        case .keyUp:
+            if keyCode == 49 { spaceHeld = false }
+        default:
+            break
+        }
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        switch mode {
-        case .screenshot:
-            drawScreenshotOverlay()
-        case .textOCR:
-            drawTextOverlay()
-        }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        overlayLogger.notice("Overlay mouse down.")
-        startPoint = convert(event.locationInWindow, from: nil)
-        currentPoint = startPoint
-        needsDisplay = true
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        currentPoint = convert(event.locationInWindow, from: nil)
-        needsDisplay = true
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        overlayLogger.notice("Overlay mouse up.")
-        currentPoint = convert(event.locationInWindow, from: nil)
-
-        guard let selection = selectionRect,
-              selection.width >= Style.minimumSelectionSize,
-              selection.height >= Style.minimumSelectionSize else {
-            complete(.cancelled)
-            return
-        }
-
-        complete(.captured(convertToScreenRect(selection), screen.frame))
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
-            complete(.cancelled)
-        } else {
-            super.keyDown(with: event)
-        }
-    }
-
-    private func drawScreenshotOverlay() {
-        guard let selection = selectionRect else { return }
+        NSGraphicsContext.current?.cgContext.clear(bounds)
 
         NSColor.white.setStroke()
-        let path = NSBezierPath(rect: selection)
-        path.lineWidth = Style.screenshotBorderWidth
-        path.stroke()
+        if let selection = drag?.rect {
+            let border = NSBezierPath(rect: selection)
+            border.lineWidth = 1.5
+            border.stroke()
+        }
+        guard drag != nil || ((bounds.minX...bounds.maxX).contains(pointer.x)
+            && (bounds.minY...bounds.maxY).contains(pointer.y)) else { return }
+        let cursor = CGPoint(x: min(max(pointer.x, 0), bounds.maxX), y: min(max(pointer.y, 0), bounds.maxY))
+        let text: String
+        if let selection = drag?.rect {
+            let pixels = screen.pixelRect(for: screenRect(selection))
+            text = "\(Int(pixels.width))\n\(Int(pixels.height))"
+        } else {
+            let x = min(Int(floor(cursor.x * CGFloat(screen.pixelWidth) / bounds.width)), screen.pixelWidth - 1)
+            let y = min(Int(floor((bounds.maxY - cursor.y) * CGFloat(screen.pixelHeight) / bounds.height)), screen.pixelHeight - 1)
+            text = "\(x)\n\(y)"
+        }
+        drawLabel(text, at: cursor)
     }
 
-    private func drawTextOverlay() {
-        guard let selection = selectionRect else { return }
-
-        NSColor.white.withAlphaComponent(Style.textFillAlpha).setFill()
-        selection.fill()
-
-        NSColor.white.withAlphaComponent(0.95).setStroke()
-        let path = NSBezierPath(rect: selection)
-        path.lineWidth = Style.textBorderWidth
-        path.stroke()
-
-        drawSelectionSizeLabel(for: selection)
-    }
-
-    private func drawSelectionSizeLabel(for selection: NSRect) {
-        let pixelSize = selectionPixelSize(for: selection)
-        let label = "\(pixelSize.width)\n\(pixelSize.height)" as NSString
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = .right
-
+    private func drawLabel(_ text: String, at point: CGPoint) {
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
+        shadow.shadowBlurRadius = 2
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraphStyle
+            .shadow: shadow
         ]
-
-        let textSize = label.boundingRect(
-            with: NSSize(width: 120, height: 80),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: attributes
-        ).integral.size
-
-        let backgroundRect = NSRect(
-            x: selection.maxX + Style.textLabelOffset,
-            y: selection.minY - textSize.height - CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom) - Style.textLabelOffset,
-            width: textSize.width + CGFloat(Style.textLabelPadding.left + Style.textLabelPadding.right),
-            height: textSize.height + CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom)
-        )
-        let clampedRect = clampLabelRect(backgroundRect)
-
-        let labelBackground = NSBezierPath(roundedRect: clampedRect, xRadius: 6, yRadius: 6)
-        NSColor.black.withAlphaComponent(0.55).setFill()
-        labelBackground.fill()
-
-        label.draw(
-            in: NSRect(
-                x: clampedRect.minX + CGFloat(Style.textLabelPadding.left),
-                y: clampedRect.minY + CGFloat(Style.textLabelPadding.bottom),
-                width: clampedRect.width - CGFloat(Style.textLabelPadding.left + Style.textLabelPadding.right),
-                height: clampedRect.height - CGFloat(Style.textLabelPadding.top + Style.textLabelPadding.bottom)
-            ),
-            withAttributes: attributes
-        )
+        let label = text as NSString
+        let size = label.size(withAttributes: attributes)
+        var origin = CGPoint(x: point.x + 10, y: point.y - 10 - size.height)
+        if origin.x + size.width > bounds.maxX - 4 { origin.x = point.x - 10 - size.width }
+        if origin.y < 4 { origin.y = point.y + 10 }
+        origin.x = min(max(4, origin.x), bounds.maxX - size.width - 4)
+        origin.y = min(max(4, origin.y), bounds.maxY - size.height - 4)
+        label.draw(at: origin, withAttributes: attributes)
     }
 
-    private func clampLabelRect(_ rect: NSRect) -> NSRect {
-        var adjusted = rect
-        if adjusted.maxX > bounds.maxX - 8 {
-            adjusted.origin.x = max(bounds.minX + 8, bounds.maxX - 8 - adjusted.width)
-        }
-        if adjusted.minX < bounds.minX + 8 {
-            adjusted.origin.x = bounds.minX + 8
-        }
-        if adjusted.minY < bounds.minY + 8 {
-            adjusted.origin.y = min(bounds.maxY - 8 - adjusted.height, selectionRect?.maxY ?? adjusted.minY + Style.textLabelOffset)
-        }
-        if adjusted.maxY > bounds.maxY - 8 {
-            adjusted.origin.y = bounds.maxY - 8 - adjusted.height
-        }
-        return adjusted
-    }
-
-    private func selectionPixelSize(for rect: NSRect) -> (width: Int, height: Int) {
-        let scale = window?.backingScaleFactor ?? screen.backingScaleFactor
-        return (
-            width: Int(round(rect.width * scale)),
-            height: Int(round(rect.height * scale))
-        )
-    }
-
-    private var selectionRect: NSRect? {
-        guard let startPoint, let currentPoint else { return nil }
-
-        return NSRect(
-            x: min(startPoint.x, currentPoint.x),
-            y: min(startPoint.y, currentPoint.y),
-            width: abs(startPoint.x - currentPoint.x),
-            height: abs(startPoint.y - currentPoint.y)
-        )
-    }
-
-    private func convertToScreenRect(_ rect: NSRect) -> CGRect {
-        CGRect(
-            x: screen.frame.minX + rect.minX,
-            y: screen.frame.minY + rect.minY,
-            width: rect.width,
-            height: rect.height
-        )
+    private func screenRect(_ rect: CGRect) -> CGRect {
+        rect.offsetBy(dx: screen.screenFrame.minX, dy: screen.screenFrame.minY)
     }
 
     private func complete(_ result: CaptureOverlayResult) {
-        guard !didComplete else {
-            overlayLogger.notice("Ignoring duplicate overlay view completion.")
-            return
-        }
-
+        guard !didComplete else { return }
         didComplete = true
-        DispatchQueue.main.async { [completion] in
-            completion(result)
-        }
+        completion(result)
     }
 }

@@ -20,11 +20,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onQuit: { [weak self] in self?.quit() }
         )
 
-        KeyboardShortcuts.onKeyUp(for: .captureArea) { [weak self] in
+        KeyboardShortcuts.onKeyDown(for: .captureArea) { [weak self] in
             self?.captureCoordinator.captureArea()
         }
 
-        KeyboardShortcuts.onKeyUp(for: .captureText) { [weak self] in
+        KeyboardShortcuts.onKeyDown(for: .captureText) { [weak self] in
             self?.captureCoordinator.captureText()
         }
     }
