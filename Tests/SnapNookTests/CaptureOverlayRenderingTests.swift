@@ -7,6 +7,54 @@ final class CaptureOverlayRenderingTests: XCTestCase {
     private let bounds = CGRect(x: 0, y: 0, width: 320, height: 240)
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 
+    func testPrecisionCrosshairHasAnEmptyCenter() throws {
+        let pointer = CGPoint(x: 120, y: 140)
+        for mode in [CaptureSelectionMode.screenshot, .textOCR] {
+            for scale in [1, 2] {
+                let overlay = try renderOverlay(mode: mode, scale: scale, pointer: pointer)
+                let data = pixels(overlay)
+                let center = CGRect(x: pointer.x - 2, y: pointer.y - 2, width: 4, height: 4)
+                for y in 0..<overlay.pixelsHigh {
+                    for x in 0..<overlay.pixelsWide where center.contains(viewPoint(x: x, y: y, scale: scale)) {
+                        XCTAssertEqual(data[y * overlay.bytesPerRow + x * 4 + 3], 0,
+                                       "Precision cursor must leave the center unobstructed")
+                    }
+                }
+            }
+        }
+    }
+
+    func testCrosshairAndDigitsRemainVisibleOnWhiteBackground() throws {
+        let pointer = CGPoint(x: 120, y: 140)
+        for mode in [CaptureSelectionMode.screenshot, .textOCR] {
+            for scale in [1, 2] {
+                let overlay = try renderOverlay(mode: mode, scale: scale, pointer: pointer)
+                let composite = try bitmap(scale: scale) {
+                    NSColor.white.setFill()
+                    bounds.fill()
+                    NSGraphicsContext.current?.cgContext.draw(overlay.cgImage!, in: bounds)
+                }
+                let data = pixels(composite)
+                let cursorRect = CGRect(x: pointer.x - 12, y: pointer.y - 12, width: 24, height: 24)
+                let labelRect = hudRect(text: scale == 1 ? "120\n100" : "240\n200", pointer: pointer)
+                // The precision cursor's subpixel outline is antialiased at 1×.
+                for (rect, threshold) in [(cursorRect, UInt8(160)), (labelRect, UInt8(80))] {
+                    var darkPixels = 0
+                    for y in 0..<composite.pixelsHigh {
+                        for x in 0..<composite.pixelsWide where rect.contains(viewPoint(x: x, y: y, scale: scale)) {
+                            let offset = y * composite.bytesPerRow + x * 4
+                            if data[offset] < threshold && data[offset + 1] < threshold && data[offset + 2] < threshold {
+                                darkPixels += 1
+                            }
+                        }
+                    }
+                    XCTAssertGreaterThan(darkPixels, 20 * scale * scale,
+                                         "Crosshair and digits must have a sharp dark outline on white")
+                }
+            }
+        }
+    }
+
     func testIdleHUDShowsPixelCoordinatesWithoutOtherOverlayGraphics() throws {
         for mode in [CaptureSelectionMode.screenshot, .textOCR] {
             for scale in [1, 2] {
@@ -14,7 +62,7 @@ final class CaptureOverlayRenderingTests: XCTestCase {
                 let text = scale == 1 ? "120\n99" : "241\n199"
                 let image = try renderOverlay(mode: mode, scale: scale, pointer: point)
                 try assertHUD(image, text: text, pointer: point, scale: scale)
-                assertUniform(image, ignoring: hudRect(text: text, pointer: point).insetBy(dx: -4, dy: -4),
+                assertUniform(image, ignoring: graphicsRect(text: text, pointer: point),
                               scale: scale)
             }
         }
@@ -48,7 +96,7 @@ final class CaptureOverlayRenderingTests: XCTestCase {
                     let text = scale == 1 ? text1x : text2x
                     let image = try renderOverlay(mode: mode, scale: scale, pointer: point)
                     try assertHUD(image, text: text, pointer: point, scale: scale)
-                    assertUniform(image, ignoring: hudRect(text: text, pointer: point).insetBy(dx: -4, dy: -4),
+                    assertUniform(image, ignoring: graphicsRect(text: text, pointer: point),
                                   scale: scale)
                 }
             }
@@ -145,11 +193,12 @@ final class CaptureOverlayRenderingTests: XCTestCase {
     }
 
     private var attributes: [NSAttributedString.Key: Any] {
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
-        shadow.shadowBlurRadius = 2
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
-        return [.font: font, .foregroundColor: NSColor.white, .shadow: shadow]
+        [.font: font, .foregroundColor: NSColor.white, .strokeColor: NSColor.black, .strokeWidth: -16]
+    }
+
+    private func graphicsRect(text: String, pointer: CGPoint) -> CGRect {
+        hudRect(text: text, pointer: pointer).insetBy(dx: -4, dy: -4)
+            .union(CGRect(x: pointer.x - 12, y: pointer.y - 12, width: 24, height: 24))
     }
 
     private func hudRect(text: String, pointer: CGPoint) -> CGRect {
@@ -168,15 +217,13 @@ final class CaptureOverlayRenderingTests: XCTestCase {
         let rect = hudRect(text: text, pointer: pointer)
         let actualPixels = pixels(actual)
         let expected = try bitmap(scale: scale) {
-            NSColor(deviceRed: CGFloat(actualPixels[0]) / 255,
-                    green: CGFloat(actualPixels[1]) / 255,
-                    blue: CGFloat(actualPixels[2]) / 255, alpha: 1).setFill()
-            bounds.fill()
             (text as NSString).draw(at: rect.origin, withAttributes: attributes)
+            (text as NSString).draw(at: rect.origin, withAttributes: [.font: font, .foregroundColor: NSColor.white])
         }
         let expectedPixels = pixels(expected)
         let hudBounds = rect.insetBy(dx: -2, dy: -2)
         let selectionBounds = selection?.insetBy(dx: -2, dy: -2)
+        let cursorBounds = CGRect(x: pointer.x - 12, y: pointer.y - 12, width: 24, height: 24)
         var actualCount = 0
         var expectedCount = 0
         var matchedCount = 0
@@ -185,6 +232,9 @@ final class CaptureOverlayRenderingTests: XCTestCase {
                 let offset = y * actual.bytesPerRow + x * 4
                 let expectedWhite = isWhite(expectedPixels, at: offset)
                 var actualWhite = isWhite(actualPixels, at: offset)
+                if cursorBounds.contains(viewPoint(x: x, y: y, scale: scale)) {
+                    actualWhite = false
+                }
                 if let selectionBounds {
                     let point = viewPoint(x: x, y: y, scale: scale)
                     if !hudBounds.contains(point) && selectionBounds.contains(point) {

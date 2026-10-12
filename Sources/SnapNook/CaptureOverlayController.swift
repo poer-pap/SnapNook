@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import OSLog
 
 private let overlayLogger = Logger(subsystem: "com.ethan.snapnook", category: "CaptureOverlay")
@@ -23,6 +24,8 @@ final class CaptureOverlayController {
     private var selectionWindow: CaptureOverlayWindow?
     private var didFinish = false
     private var didCleanup = false
+    private var cursorHidden = false
+    private var backgroundCursorEnabled = false
 
     init(screens: [CaptureScreen], mode: CaptureSelectionMode, completion: @escaping (CaptureOverlayResult) -> Void) {
         self.screens = screens
@@ -31,6 +34,7 @@ final class CaptureOverlayController {
     }
 
     deinit {
+        restoreCursor()
         print("CaptureOverlayController deinit")
     }
 
@@ -54,8 +58,12 @@ final class CaptureOverlayController {
             finish(.failed)
             return
         }
+        guard hideCursor() else {
+            overlayLogger.error("Could not hide the system cursor for selection.")
+            finish(.failed)
+            return
+        }
         windows.forEach { $0.orderFrontRegardless() }
-        CaptureOverlayView.selectionCursor.set()
         overlayLogger.notice("Overlay windows shown.")
     }
 
@@ -87,6 +95,7 @@ final class CaptureOverlayController {
         didFinish = true
         overlayLogger.notice("Overlay finishing.")
         windows.forEach { $0.orderOut(nil) }
+        restoreCursor()
 
         DispatchQueue.main.async { [completion] in
             completion(result)
@@ -104,7 +113,7 @@ final class CaptureOverlayController {
         inputSession?.stop()
         inputSession = nil
         selectionWindow = nil
-        NSCursor.arrow.set()
+        restoreCursor()
         overlayLogger.notice("Overlay cleanup.")
         let windowsToClose = windows
         windows.removeAll()
@@ -112,6 +121,38 @@ final class CaptureOverlayController {
         DispatchQueue.main.async {
             windowsToClose.forEach { $0.closeIfNeeded() }
         }
+    }
+
+    func hideCursor() -> Bool {
+        guard !cursorHidden else { return true }
+        guard setBackgroundCursorAccess(true) else { return false }
+        backgroundCursorEnabled = true
+        cursorHidden = CGDisplayHideCursor(CGMainDisplayID()) == .success
+        if !cursorHidden { restoreCursor() }
+        return cursorHidden
+    }
+
+    func restoreCursor() {
+        if cursorHidden {
+            cursorHidden = false
+            CGDisplayShowCursor(CGMainDisplayID())
+        }
+        if backgroundCursorEnabled {
+            backgroundCursorEnabled = false
+            _ = setBackgroundCursorAccess(false)
+        }
+    }
+
+    private func setBackgroundCursorAccess(_ enabled: Bool) -> Bool {
+        // Private WindowServer property: permit cursor changes without activating SnapNook.
+        let process = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let connectionSymbol = dlsym(process, "CGSMainConnectionID"),
+              let propertySymbol = dlsym(process, "CGSSetConnectionProperty") else { return false }
+        let connection = unsafeBitCast(connectionSymbol, to: (@convention(c) () -> Int32).self)()
+        let setProperty = unsafeBitCast(propertySymbol,
+                                       to: (@convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32).self)
+        return setProperty(connection, connection, "SetsCursorInBackground" as CFString,
+                           enabled ? kCFBooleanTrue : kCFBooleanFalse) == CGError.success.rawValue
     }
 }
 
@@ -188,24 +229,25 @@ struct CaptureSelectionDrag {
 }
 
 final class CaptureOverlayView: NSView {
-    static let selectionCursor: NSCursor = {
-        let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
-            let cross = NSBezierPath()
-            cross.move(to: CGPoint(x: 2, y: 12))
-            cross.line(to: CGPoint(x: 22, y: 12))
-            cross.move(to: CGPoint(x: 12, y: 2))
-            cross.line(to: CGPoint(x: 12, y: 22))
-            cross.appendOval(in: CGRect(x: 7, y: 7, width: 10, height: 10))
-            NSColor.black.setStroke()
-            cross.lineWidth = 3
-            cross.stroke()
-            NSColor.white.setStroke()
-            cross.lineWidth = 1
-            cross.stroke()
-            return true
-        }
-        return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
-    }()
+    static let selectionCursorImage = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+        let cross = NSBezierPath()
+        cross.move(to: CGPoint(x: 2, y: 12))
+        cross.line(to: CGPoint(x: 7, y: 12))
+        cross.move(to: CGPoint(x: 17, y: 12))
+        cross.line(to: CGPoint(x: 22, y: 12))
+        cross.move(to: CGPoint(x: 12, y: 2))
+        cross.line(to: CGPoint(x: 12, y: 7))
+        cross.move(to: CGPoint(x: 12, y: 17))
+        cross.line(to: CGPoint(x: 12, y: 22))
+        cross.appendOval(in: CGRect(x: 7, y: 7, width: 10, height: 10))
+        NSColor.black.setStroke()
+        cross.lineWidth = 2.5
+        cross.stroke()
+        NSColor.white.setStroke()
+        cross.lineWidth = 1
+        cross.stroke()
+        return true
+    }
 
     private let screen: CaptureScreen
     private let completion: (CaptureOverlayResult) -> Void
@@ -237,7 +279,6 @@ final class CaptureOverlayView: NSView {
         guard !didComplete else { return }
         switch type {
         case .mouseMoved:
-            Self.selectionCursor.set()
             pointer = point
         case .leftMouseDown:
             pointer = point
@@ -274,6 +315,7 @@ final class CaptureOverlayView: NSView {
         guard drag != nil || ((bounds.minX...bounds.maxX).contains(pointer.x)
             && (bounds.minY...bounds.maxY).contains(pointer.y)) else { return }
         let cursor = CGPoint(x: min(max(pointer.x, 0), bounds.maxX), y: min(max(pointer.y, 0), bounds.maxY))
+        Self.selectionCursorImage.draw(in: CGRect(x: cursor.x - 12, y: cursor.y - 12, width: 24, height: 24))
         let text: String
         if let selection = drag?.rect {
             let pixels = screen.pixelRect(for: screenRect(selection))
@@ -287,14 +329,12 @@ final class CaptureOverlayView: NSView {
     }
 
     private func drawLabel(_ text: String, at point: CGPoint) {
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
-        shadow.shadowBlurRadius = 2
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+            .font: font,
             .foregroundColor: NSColor.white,
-            .shadow: shadow
+            .strokeColor: NSColor.black,
+            .strokeWidth: -16
         ]
         let label = text as NSString
         let size = label.size(withAttributes: attributes)
@@ -304,6 +344,9 @@ final class CaptureOverlayView: NSView {
         origin.x = min(max(4, origin.x), bounds.maxX - size.width - 4)
         origin.y = min(max(4, origin.y), bounds.maxY - size.height - 4)
         label.draw(at: origin, withAttributes: attributes)
+        label.draw(at: origin, withAttributes: [
+            .font: font, .foregroundColor: NSColor.white
+        ])
     }
 
     private func screenRect(_ rect: CGRect) -> CGRect {
