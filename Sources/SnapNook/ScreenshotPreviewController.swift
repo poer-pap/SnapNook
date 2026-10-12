@@ -63,7 +63,6 @@ final class ScreenshotPreviewController {
         card.view.onEdit = { [weak self, weak card] in
             guard let self, let card, !card.isRemoving else { return }
             self.openEditor(for: card.item)
-            self.remove(id: card.id)
         }
         card.view.onClose = { [weak self, weak card] in
             guard let card else { return }
