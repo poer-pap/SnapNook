@@ -29,7 +29,9 @@ final class ScreenshotPreviewController {
     private var isHiddenForCapture = false
     private var draggingView: ScreenshotPreviewView?
 
-    var isDragging: Bool { draggingView != nil }
+    private var isDraggingPinnedFile = false
+
+    var isDragging: Bool { draggingView != nil || isDraggingPinnedFile }
 
     init() {
         screenObserver = NotificationCenter.default.addObserver(
@@ -69,6 +71,20 @@ final class ScreenshotPreviewController {
             guard let self, let card, !card.isRemoving,
                   let screen = card.view.window?.screen ?? Self.screen(for: card.item) ?? NSScreen.screens.first else { return }
             let controller = PinnedScreenshotWindowController(item: card.item, screen: screen)
+            controller.onClose = { [weak self, weak controller] in
+                guard let self, let controller else { return }
+                self.pinnedControllers.removeAll { $0 === controller }
+            }
+            if let view = controller.window?.contentView as? PinnedScreenshotView {
+                view.onDragStarted = { [weak self] in self?.isDraggingPinnedFile = true }
+                view.onDragEnded = { [weak self] in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.isDraggingPinnedFile = false
+                        self.updateLists()
+                    }
+                }
+            }
             self.pinnedControllers.append(controller)
             if !self.isHiddenForCapture { controller.show() }
         }
