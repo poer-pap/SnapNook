@@ -6,6 +6,7 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
+    var onPin: (() -> Void)?
     var onDragStarted: (() -> Void)?
     var onDragEnded: ((Bool) -> Void)?
     var isEnabled = true
@@ -196,6 +197,20 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         let saveButton = makeButton(title: "Save", action: #selector(saveTapped))
         let closeButton = makeIconButton(symbolName: "xmark", title: "Close", action: #selector(closeTapped))
         let editButton = makeIconButton(symbolName: "pencil.tip", title: "Edit", action: #selector(editTapped))
+        let pinButton = makeIconButton(symbolName: "pin.fill", title: "Pin", action: #selector(pinTapped))
+        if let pin = pinButton.image {
+            pinButton.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                NSGraphicsContext.saveGraphicsState()
+                defer { NSGraphicsContext.restoreGraphicsState() }
+                let transform = NSAffineTransform()
+                transform.translateX(by: rect.midX, yBy: rect.midY)
+                transform.rotate(byDegrees: -45)
+                transform.concat()
+                pin.draw(in: NSRect(x: -pin.size.width / 2, y: -pin.size.height / 2, width: pin.size.width, height: pin.size.height))
+                return true
+            }
+            pinButton.image?.isTemplate = true
+        }
         if let tip = editButton.image {
             editButton.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
                 NSGraphicsContext.saveGraphicsState()
@@ -214,18 +229,20 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         stack.spacing = 10
         stack.alignment = .centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
-        [stack, closeButton, editButton].forEach { controlsView.addSubview($0) }
+        [stack, closeButton, editButton, pinButton].forEach { controlsView.addSubview($0) }
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: controlsView.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: controlsView.centerYAnchor),
             closeButton.leadingAnchor.constraint(equalTo: controlsView.leadingAnchor, constant: 6),
             closeButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 6),
+            pinButton.trailingAnchor.constraint(equalTo: controlsView.trailingAnchor, constant: -6),
+            pinButton.topAnchor.constraint(equalTo: controlsView.topAnchor, constant: 6),
             editButton.leadingAnchor.constraint(equalTo: controlsView.leadingAnchor, constant: 6),
             editButton.bottomAnchor.constraint(equalTo: controlsView.bottomAnchor, constant: -6)
         ])
     }
 
-    private func makeButton(title: String, action: Selector, size: NSSize = NSSize(width: 52, height: 27)) -> NSButton {
+    private func makeButton(title: String, action: Selector?, size: NSSize = NSSize(width: 52, height: 27)) -> NSButton {
         let button = PreviewButton(title: title, target: self, action: action)
         button.isBordered = false
         button.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -239,7 +256,7 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         return button
     }
 
-    private func makeIconButton(symbolName: String, title: String, action: Selector) -> NSButton {
+    private func makeIconButton(symbolName: String, title: String, action: Selector?) -> NSButton {
         let button = makeButton(title: "", action: action, size: NSSize(width: 22, height: 22))
         button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: symbolName == "xmark" ? 7 : 10, weight: .bold))
@@ -250,6 +267,7 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         return button
     }
 
+    @objc private func pinTapped() { if isEnabled { onPin?() } }
     @objc private func editTapped() { if isEnabled { onEdit?() } }
     @objc private func copyTapped() { if isEnabled { onCopy?() } }
     @objc private func saveTapped() { if isEnabled { onSave?() } }

@@ -24,6 +24,7 @@ final class ScreenshotPreviewController {
     private var cards: [Card] = []
     private var lists: [NSNumber: ScreenshotPreviewList] = [:]
     private var editorControllers: [ScreenshotEditorWindowController] = []
+    private var pinnedControllers: [PinnedScreenshotWindowController] = []
     private var screenObserver: NSObjectProtocol?
     private var isHiddenForCapture = false
     private var draggingView: ScreenshotPreviewView?
@@ -64,6 +65,13 @@ final class ScreenshotPreviewController {
             guard let self, let card, !card.isRemoving else { return }
             self.openEditor(for: card.item)
         }
+        card.view.onPin = { [weak self, weak card] in
+            guard let self, let card, !card.isRemoving,
+                  let screen = card.view.window?.screen ?? Self.screen(for: card.item) ?? NSScreen.screens.first else { return }
+            let controller = PinnedScreenshotWindowController(item: card.item, screen: screen)
+            self.pinnedControllers.append(controller)
+            if !self.isHiddenForCapture { controller.show() }
+        }
         card.view.onClose = { [weak self, weak card] in
             guard let card else { return }
             self?.remove(id: card.id)
@@ -86,12 +94,14 @@ final class ScreenshotPreviewController {
     func hideForCapture() {
         isHiddenForCapture = true
         for list in lists.values { list.panel.orderOut(nil) }
+        for controller in pinnedControllers { controller.window?.orderOut(nil) }
     }
 
     func restoreAfterCapture() {
         guard isHiddenForCapture else { return }
         isHiddenForCapture = false
         for list in lists.values { list.panel.orderFrontRegardless() }
+        for controller in pinnedControllers { controller.show() }
     }
 
     private func remove(id: UUID) {
