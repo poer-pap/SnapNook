@@ -83,6 +83,31 @@ final class CaptureOverlayRenderingTests: XCTestCase {
         }
     }
 
+    func testDraggingAddsMatteFillOnlyInsideSelection() throws {
+        for mode in [CaptureSelectionMode.screenshot, .textOCR] {
+            for scale in [1, 2] {
+                let overlay = try renderOverlay(mode: mode, scale: scale,
+                                                pointer: CGPoint(x: 240, y: 200),
+                                                anchor: CGPoint(x: 40, y: 40))
+                let inside = try XCTUnwrap(overlay.colorAt(x: 100 * scale, y: 120 * scale)?.usingColorSpace(.deviceRGB))
+                let outside = try XCTUnwrap(overlay.colorAt(x: 20 * scale, y: 120 * scale))
+                XCTAssertEqual(inside.alphaComponent, 0.3, accuracy: 0.02)
+                XCTAssertEqual(inside.redComponent, 0.65, accuracy: 0.02)
+                XCTAssertEqual(outside.alphaComponent, 0, accuracy: 0.01)
+                for background in [NSColor.white, .black] {
+                    let composite = try bitmap(scale: scale) {
+                        background.setFill()
+                        bounds.fill()
+                        NSGraphicsContext.current?.cgContext.draw(overlay.cgImage!, in: bounds)
+                    }
+                    let color = try XCTUnwrap(composite.colorAt(x: 100 * scale, y: 120 * scale)?.usingColorSpace(.deviceRGB))
+                    let original = try XCTUnwrap(background.usingColorSpace(.deviceRGB))
+                    XCTAssertGreaterThan(abs(color.redComponent - original.redComponent), 0.08)
+                }
+            }
+        }
+    }
+
     func testCornerHUDChangesSideAndStaysInsideScreen() throws {
         let fixtures: [(CGPoint, String, String)] = [
             (CGPoint(x: 1, y: 1), "1\n239", "2\n478"),

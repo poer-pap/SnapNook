@@ -306,9 +306,15 @@ final class CaptureOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.current?.cgContext.clear(bounds)
 
-        NSColor.white.setStroke()
         if let selection = drag?.rect {
+            // A neutral translucent veil stays visible on white without freezing the live screen.
+            NSColor(deviceWhite: 0.65, alpha: 0.3).setFill()
+            selection.fill()
             let border = NSBezierPath(rect: selection)
+            NSColor.black.withAlphaComponent(0.65).setStroke()
+            border.lineWidth = 3
+            border.stroke()
+            NSColor.white.setStroke()
             border.lineWidth = 1.5
             border.stroke()
         }
