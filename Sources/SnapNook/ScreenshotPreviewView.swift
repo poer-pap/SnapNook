@@ -43,7 +43,17 @@ final class ScreenshotPreviewView: NSView, NSDraggingSource {
         imageView.image = item.image
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
-        imageView.frame = content.bounds
+        // Aspect-fill the card; its rounded content layer clips the overflow.
+        let imageSize = item.image.size
+        if imageSize.width > 0, imageSize.height > 0 {
+            let scale = max(content.bounds.width / imageSize.width, content.bounds.height / imageSize.height)
+            let size = NSSize(width: imageSize.width * scale, height: imageSize.height * scale)
+            imageView.frame = NSRect(x: content.bounds.midX - size.width / 2,
+                                     y: content.bounds.midY - size.height / 2,
+                                     width: size.width, height: size.height)
+        } else {
+            imageView.frame = content.bounds
+        }
         content.addSubview(imageView)
 
         materialView.frame = content.bounds
